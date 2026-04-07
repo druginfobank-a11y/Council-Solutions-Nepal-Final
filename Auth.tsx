@@ -243,5 +243,10 @@ export const getWeeklyLeaderboard = (council: string, callback: (results: any[])
     });
     const sorted = Array.from(userBest.values()).sort((a, b) => b.score - a.score).slice(0, 10);
     callback(sorted);
+  }, (error) => {
+    console.error("Leaderboard sync failure:", error);
+    if (error.code === 'failed-precondition') {
+      console.warn("Composite index required for leaderboard. Please check the Firebase console.");
+    }
   });
 };

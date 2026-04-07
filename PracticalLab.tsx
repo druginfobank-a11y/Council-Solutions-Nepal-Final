@@ -93,6 +93,8 @@ const Library: React.FC<LibraryProps> = ({ user }) => {
       const qResults = query(collection(db, 'exam_results'), where('userId', '==', user.id));
       const unsubResults = onSnapshot(qResults, (snap) => {
         setExamResults(snap.docs.map(d => d.data() as ExamResult));
+      }, (err) => {
+        console.warn("Library results sync failure:", err);
       });
       return () => unsubResults();
     }

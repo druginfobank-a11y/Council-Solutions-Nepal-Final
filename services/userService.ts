@@ -227,7 +227,7 @@ export const getWeeklyLeaderboard = (council: string, callback: (results: any[])
   startOfWeek.setHours(0, 0, 0, 0);
 
   const q = query(
-    collection(db, 'results'),
+    collection(db, 'exam_results'),
     where('council', '==', council),
     where('timestamp', '>=', startOfWeek.toISOString()),
     orderBy('timestamp', 'desc')

@@ -12,11 +12,11 @@ service cloud.firestore {
     }
 
     function isMasterDev() {
-      return isSignedIn() && request.auth.token.email == 'chykaran2055@gmail.com';
+      return isSignedIn() && request.auth.token.email == 'druginfobank@gmail.com';
     }
 
     function isAdmin() {
-      return isMasterDev() || (isSignedIn() && getUserData().role == 'ADMIN');
+      return isMasterDev() || (isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'ADMIN');
     }
     
     function isInstructor() {

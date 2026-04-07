@@ -164,7 +164,7 @@ const LockedIntelligenceScreen: React.FC<{ user: User }> = ({ user }) => {
   );
 };
 
-const KeySelectionScreen: React.FC<{ onAuthorize: () => void }> = ({ onAuthorize }) => (
+const KeySelectionScreen: React.FC<{ onAuthorize: () => void, isVercel: boolean }> = ({ onAuthorize, isVercel }) => (
   <div className="h-screen bg-slate-950 flex flex-col items-center justify-center p-6 text-center relative overflow-hidden">
     <div className="absolute inset-0 bg-blue-600/5 blur-[120px] rounded-full animate-pulse"></div>
     <div className="max-w-md w-full space-y-10 animate-in relative z-10">
@@ -174,10 +174,27 @@ const KeySelectionScreen: React.FC<{ onAuthorize: () => void }> = ({ onAuthorize
         <p className="text-blue-500 text-[10px] font-black uppercase tracking-[0.4em]">Protocol: Verify Intelligence Key</p>
       </div>
       <div className="bg-white/5 border border-white/10 p-8 rounded-[40px] backdrop-blur-xl">
-        <p className="text-slate-400 text-sm font-medium leading-relaxed mb-6 italic">"The intelligence satellite network requires a valid API key to synchronize real-time academic data and AI tutoring."</p>
-        <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noopener noreferrer" className="text-[9px] font-black text-blue-400 uppercase tracking-widest hover:underline block">Check Billing Compliance</a>
+        {isVercel ? (
+          <div className="space-y-4">
+            <p className="text-slate-400 text-sm font-medium leading-relaxed italic">"Vercel Node detected. The intelligence network requires an environment variable to be set in your Vercel Dashboard."</p>
+            <div className="bg-black/40 p-4 rounded-2xl text-left border border-white/5">
+              <p className="text-[10px] text-blue-400 font-bold uppercase mb-2">Vercel Configuration Steps:</p>
+              <ol className="text-[10px] text-slate-500 space-y-1 list-decimal list-inside">
+                <li>Go to Vercel Project Settings &gt; Environment Variables</li>
+                <li>Add variable: <code className="text-white">GEMINI_API_KEY</code></li>
+                <li>Paste your key from AI Studio</li>
+                <li>Redeploy the application</li>
+              </ol>
+            </div>
+          </div>
+        ) : (
+          <p className="text-slate-400 text-sm font-medium leading-relaxed mb-6 italic">"The intelligence satellite network requires a valid API key to synchronize real-time academic data and AI tutoring."</p>
+        )}
+        <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noopener noreferrer" className="text-[9px] font-black text-blue-400 uppercase tracking-widest hover:underline block mt-4">Check Billing Compliance</a>
       </div>
-      <button onClick={onAuthorize} className="w-full bg-blue-600 text-white py-5 rounded-3xl font-black text-[11px] uppercase tracking-[0.2em] shadow-2xl shadow-blue-600/20 hover:scale-105 active:scale-95 transition-all">Authorize Node Link</button>
+      {!isVercel && (
+        <button onClick={onAuthorize} className="w-full bg-blue-600 text-white py-5 rounded-3xl font-black text-[11px] uppercase tracking-[0.2em] shadow-2xl shadow-blue-600/20 hover:scale-105 active:scale-95 transition-all">Authorize Node Link</button>
+      )}
     </div>
   </div>
 );
@@ -306,7 +323,7 @@ const App: React.FC = () => {
 
   const handleLogout = () => signOut(auth);
 
-  if (needsKey) return <KeySelectionScreen onAuthorize={handleAuthorize} />;
+  if (needsKey) return <KeySelectionScreen onAuthorize={handleAuthorize} isVercel={!(window as any).aistudio} />;
   if (initializing) return <div className="h-screen bg-slate-950 flex items-center justify-center"><div className="w-10 h-10 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div></div>;
 
   const isExpired = user?.role === UserRole.STUDENT && 

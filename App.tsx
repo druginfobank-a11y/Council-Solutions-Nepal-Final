@@ -234,7 +234,12 @@ const App: React.FC = () => {
 
   useEffect(() => {
     const checkKeySelection = async () => {
-      const apiKey = String(process.env.GEMINI_API_KEY || "");
+      const apiKey = String(
+        process.env.GEMINI_API_KEY || 
+        process.env.API_KEY || 
+        (import.meta as any).env?.VITE_GEMINI_API_KEY || 
+        ""
+      );
       const aistudio = (window as any).aistudio;
       const isKeyMissing = !apiKey || apiKey.length < 5;
       if (isKeyMissing && aistudio) {

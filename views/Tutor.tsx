@@ -226,10 +226,13 @@ const Tutor: React.FC = () => {
       const response = await getTutorResponse(queryToUse, history, context);
       setMessages(prev => [...prev, { role: 'model', content: String(response.text || ''), node: String(response.node || 'unknown') }]);
     } catch (error: any) {
+      const isAuthError = error.message === 'AUTHORIZATION_REQUIRED';
       setMessages(prev => [...prev, { 
         role: 'error', 
-        content: `### Neural Link Fault\n${String(error.message || "Diagnostic connection failure.")}`,
-        errorType: error.message === 'AUTHORIZATION_REQUIRED' ? 'auth' : 'generic'
+        content: isAuthError 
+          ? `### Authorization Required\nGemini API Key is missing. Please set **GEMINI_API_KEY** in your Vercel Environment Variables and **redeploy** your application.`
+          : `### Neural Link Fault\n${String(error.message || "Diagnostic connection failure.")}`,
+        errorType: isAuthError ? 'auth' : 'generic'
       }]);
     } finally { setIsLoading(false); }
   };

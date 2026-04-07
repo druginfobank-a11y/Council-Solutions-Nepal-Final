@@ -68,8 +68,18 @@ const handleAIError = (error: any) => {
 };
 
 const getAIClient = () => {
-  const key = String(process.env.GEMINI_API_KEY || "");
-  if (!key || key.length < 5) throw new Error("AUTHORIZATION_REQUIRED");
+  // Check multiple possible sources for the API key
+  const key = String(
+    process.env.GEMINI_API_KEY || 
+    process.env.API_KEY || 
+    (import.meta as any).env?.VITE_GEMINI_API_KEY || 
+    ""
+  );
+  
+  if (!key || key.length < 5) {
+    console.error("Gemini API Key is missing or invalid. Source: process.env.GEMINI_API_KEY");
+    throw new Error("AUTHORIZATION_REQUIRED");
+  }
   return new GoogleGenAI({ apiKey: key });
 };
 
@@ -263,8 +273,13 @@ export const generateAcademicVideo = async (prompt: string, onProgress: (msg: st
       config: { numberOfVideos: 1, resolution: '720p', aspectRatio: '16:9' } 
     });
     
-    const key = String(process.env.GEMINI_API_KEY || "");
-
+    const key = String(
+      process.env.GEMINI_API_KEY || 
+      process.env.API_KEY || 
+      (import.meta as any).env?.VITE_GEMINI_API_KEY || 
+      ""
+    );
+    
     while (!operation.done) {
       onProgress("Synthesizing...");
       await new Promise(resolve => setTimeout(resolve, 8000));

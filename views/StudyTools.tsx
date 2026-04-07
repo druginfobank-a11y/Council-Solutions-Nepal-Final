@@ -89,9 +89,13 @@ const StudyTools: React.FC<StudyToolsProps> = ({ user }) => {
         });
       }
       alert("AI Study Plan synchronized to your Study Directives!");
-    } catch (e) {
+    } catch (e: any) {
       console.error("Plan generation failed:", e);
-      alert("Neural link disrupted. Please try again.");
+      if (e.message === 'AUTHORIZATION_REQUIRED') {
+        alert("Gemini API Key missing. Please set GEMINI_API_KEY in your Vercel Environment Variables and redeploy.");
+      } else {
+        alert("Neural link disrupted. Please try again.");
+      }
     } finally {
       setIsGeneratingPlan(false);
     }
@@ -103,9 +107,13 @@ const StudyTools: React.FC<StudyToolsProps> = ({ user }) => {
       const weakSubjects = Object.keys(user.weaknesses || {}).slice(0, 3).join(', ') || 'General Medicine';
       const cards = await generateFlashcards(weakSubjects, 5);
       setReviewQuestions(cards);
-    } catch (e) {
+    } catch (e: any) {
       console.error("Review generation failed:", e);
-      alert("Flashcard synthesis failed. Node disconnected.");
+      if (e.message === 'AUTHORIZATION_REQUIRED') {
+        alert("Gemini API Key missing. Please set GEMINI_API_KEY in your Vercel Environment Variables and redeploy.");
+      } else {
+        alert("Flashcard synthesis failed. Node disconnected.");
+      }
     } finally {
       setIsGeneratingReview(false);
     }

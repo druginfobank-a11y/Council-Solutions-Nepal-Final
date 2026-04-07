@@ -1,95 +1,25 @@
-rules_version = '2';
-service cloud.firestore {
-  match /databases/{database}/documents {
-    
-    // --- CORE HELPERS ---
-    function isSignedIn() {
-      return request.auth != null;
-    }
-    
-    function getUserData() {
-      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
-    }
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
 
-    function isMasterDev() {
-      return isSignedIn() && request.auth.token.email == 'druginfobank@gmail.com';
-    }
+node_modules
+dist
+dist-ssr
+*.local
 
-    function isAdmin() {
-      return isMasterDev() || (isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'ADMIN');
-    }
-    
-    function isInstructor() {
-      return isSignedIn() && getUserData().role == 'INSTRUCTOR';
-    }
-
-    // --- COLLECTION RULES ---
-
-    match /system/{document=**} {
-      allow read: if true;
-      allow write: if isAdmin();
-    }
-
-    match /users/{userId} {
-      // Allow single document read for any signed in user (for ranking/profile view)
-      allow get: if isSignedIn();
-      // Only Admins can list the entire users collection
-      allow list: if isAdmin();
-      allow create: if isSignedIn() && request.auth.uid == userId;
-      allow update: if isSignedIn() && (
-        isAdmin() || 
-        (request.auth.uid == userId && 
-         !request.resource.data.diff(resource.data).affectedKeys().hasAny(['intelligenceApproved', 'role', 'isVerified', 'status', 'subscriptionEnd']))
-      );
-    }
-
-    match /materials/{matId} {
-      // Required for Student/Instructor library views
-      allow read: if isSignedIn();
-      allow create: if isAdmin() || (isInstructor() && getUserData().isVerified == true);
-      allow update, delete: if isAdmin();
-    }
-
-    match /quizzes/{quizId} {
-      // Required for Student/Instructor quiz hub views
-      allow read: if isSignedIn();
-      allow create: if isAdmin() || (isInstructor() && getUserData().isVerified == true);
-      allow update, delete: if isAdmin();
-    }
-
-    match /payments/{payId} {
-      // Secure check: Admins see all, users see only their own.
-      // For collection queries (list), the query MUST filter by userId if user is not Admin.
-      allow get: if isSignedIn() && (isAdmin() || resource.data.userId == request.auth.uid);
-      allow list: if isSignedIn() && (isAdmin() || (request.query.limit <= 50 && request.auth.uid != null));
-      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
-      allow update, delete: if isAdmin();
-    }
-
-    match /plans/{planId} {
-      allow read: if true;
-      allow write: if isAdmin();
-    }
-    
-    match /ads/{adId} {
-      allow read: if true;
-      allow write: if isAdmin();
-    }
-
-    match /exam_results/{resId} {
-      // Required for rankings and history
-      allow read: if isSignedIn();
-      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
-      allow update, delete: if isAdmin();
-    }
-
-    match /users/{userId}/tasks/{taskId} {
-      allow read, write: if isSignedIn() && request.auth.uid == userId;
-    }
-
-    match /ai_cache/{cacheId} {
-      allow read, create: if isSignedIn();
-      allow update, delete: if isAdmin();
-    }
-  }
-}
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+migrated_prompt_history/

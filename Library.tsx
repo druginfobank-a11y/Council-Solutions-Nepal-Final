@@ -4,7 +4,7 @@ import { User, Quiz, LearningMaterial } from '../types';
 import { db } from '../services/firebase';
 import { collection, query, where, onSnapshot } from 'firebase/firestore';
 
-const InstructorDashboard: React.FC<{ user: User }> = ({ user }) => {
+const FacultyDashboard: React.FC<{ user: User }> = ({ user }) => {
   const [myQuizzes, setMyQuizzes] = useState<Quiz[]>([]);
   const [myMaterials, setMyMaterials] = useState<LearningMaterial[]>([]);
   const [programMaterials, setProgramMaterials] = useState<LearningMaterial[]>([]);
@@ -196,4 +196,4 @@ const InstructorDashboard: React.FC<{ user: User }> = ({ user }) => {
   );
 };
 
-export default InstructorDashboard;
+export default FacultyDashboard;

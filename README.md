@@ -1,23 +1,8 @@
 {
-  "name": "Council Solutions Nepal",
-  "short_name": "CSN",
-  "description": "Premium clinical LMS and council exam prep.",
-  "start_url": "/",
-  "display": "standalone",
-  "background_color": "#020617",
-  "theme_color": "#3b82f6",
-  "icons": [
-    {
-      "src": "/logo-192.png",
-      "sizes": "192x192",
-      "type": "image/png",
-      "purpose": "any maskable"
-    },
-    {
-      "src": "/logo-512.png",
-      "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "any maskable"
-    }
+  "name": "Council Prep Nepal v3.4",
+  "description": "Academic LMS for Nepalese licensing exam preparation. This is an independent academic practice tool and is NOT affiliated with, authorized by, or endorsed by any government entity or professional council. It is designed solely for study and exam simulation purposes.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
   ]
 }

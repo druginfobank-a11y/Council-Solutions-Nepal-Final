@@ -1,274 +1,174 @@
-import React, { useState, useEffect, useRef } from 'react';
-// Fix: Use namespace import for react-router-dom to resolve named export errors
-import * as ReactRouter from 'react-router-dom';
-import { User, Plan, SystemSettings } from '../types';
-import { subscribeToPlans } from '../services/planService';
-import { doc, getDoc, collection, addDoc } from 'firebase/firestore';
-import { db, auth } from '../services/firebase';
-import { sanitizeUrl, uploadToBunny } from '../services/storageService';
+import React, { useState, useRef } from 'react';
+import { User } from '../types';
+import { generateAcademicScenario, analyzeAcademicImage, generateAcademicVideo } from '../services/geminiService';
 
-const { useNavigate } = ReactRouter as any;
+import GovernmentDisclaimer from '../components/GovernmentDisclaimer';
 
-interface PlansProps {
-  user: User;
-}
+interface PracticalLabProps { user: User; }
 
-const Plans: React.FC<PlansProps> = ({ user }) => {
-  const navigate = useNavigate();
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const [availablePlans, setAvailablePlans] = useState<Plan[]>([]);
-  const [activeTab, setActiveTab] = useState<'plans' | 'pay' | 'history'>('plans');
-  const [selectedPlan, setSelectedPlan] = useState<Plan | null>(null);
-  const [selectedMethod, setSelectedMethod] = useState<'esewa' | 'khalti'>('esewa');
-  const [refCode, setRefCode] = useState('');
-  
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [screenshotPreview, setScreenshotPreview] = useState<string | null>(null);
-  
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [uploadPercent, setUploadPercent] = useState(0);
-  const [syncError, setSyncError] = useState<string | null>(null);
-  const [qrLoading, setQrLoading] = useState(true);
+const PracticalLab: React.FC<PracticalLabProps> = ({ user }) => {
+  const [labMode, setLabMode] = useState<'audit' | 'vision' | 'theatre'>('audit');
+  const [scenario, setScenario] = useState<any>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [progressMsg, setProgressMsg] = useState('');
+  const [selectedDrug, setSelectedDrug] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState<{ isCorrect: boolean; message: string } | null>(null);
 
-  const [sysSettings, setSysSettings] = useState<Partial<SystemSettings>>({
-    esewaQrUrl: '',
-    khaltiQrUrl: '',
-    esewaNumber: '',
-    khaltiNumber: ''
-  });
+  // Vision States
+  const [visionImage, setVisionImage] = useState<File | null>(null);
+  const [visionPreview, setVisionPreview] = useState<string | null>(null);
+  const [visionQuery, setVisionQuery] = useState('Explain academic significance and suggest council-aligned study plan.');
+  const [visionResult, setVisionResult] = useState<string | null>(null);
+  const visionInputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    const fetchSettings = async () => {
-      try {
-        const snap = await getDoc(doc(db, 'system', 'config'));
-        if (snap.exists()) setSysSettings(snap.data());
-      } catch (e) {
-        console.warn("System configuration unreachable via current academic node.");
-      }
-    };
-    fetchSettings();
+  // Theatre States
+  const [theatrePrompt, setTheatrePrompt] = useState('An academic simulation of structural engineering showing correct load distribution.');
+  const [videoUrl, setVideoUrl] = useState<string | null>(null);
 
-    const unsubscribe = subscribeToPlans(setAvailablePlans, (err) => {
-      console.warn("Permission restricted for Plan Node.", err.message);
-      setSyncError("Infrastructure connectivity deferred. Please check your credentials.");
-    });
-    return () => unsubscribe();
-  }, []);
-
-  const handleSelectPlan = (plan: Plan) => {
-    setSelectedPlan(plan);
-    setSyncError(null);
-    setActiveTab('pay');
+  const startNewCase = async () => {
+    alert("Scenario Lab requires Gemini Reasoning API (Disabled in Groq Mode).");
   };
 
-  const handleScreenshotChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      setSelectedFile(file);
-      setSyncError(null);
-      const reader = new FileReader();
-      reader.onloadend = () => setScreenshotPreview(reader.result as string);
-      reader.readAsDataURL(file);
-    }
+  const handleAudit = (drugId: string) => {
+    if (!scenario || feedback) return;
+    const drug = scenario.prescriptions.find((p: any) => p.id === drugId);
+    setSelectedDrug(drugId);
+    if (drug.isErroneous) setFeedback({ isCorrect: true, message: `CRITICAL FINDING: ${drug.errorDetail}` });
+    else setFeedback({ isCorrect: false, message: `INCORRECT: ${drug.drug} is academically appropriate. Look closer.` });
   };
 
-  const handleSubmitPayment = async () => {
-    setSyncError(null);
-    
-    // Safety check for fresh authentication context
-    const currentUser = auth.currentUser;
-    if (!currentUser) {
-      setSyncError("Session Termination Error: Please re-initialize your terminal session (Log out and back in).");
-      return;
-    }
-
-    if (!selectedPlan) { setSyncError("Subscription Fault: Subscription tier not selected."); return; }
-    if (!refCode.trim()) { setSyncError("Evidence Missing: Transaction reference code required."); return; }
-    if (!selectedFile) { setSyncError("Evidence Missing: Payment screenshot required."); return; }
-    
-    setIsSubmitting(true);
-    setUploadPercent(0);
-    
+  const handleVisionAnalysis = async () => {
+    if (!visionPreview || !visionImage) return;
+    setIsLoading(true);
+    setVisionResult(null);
     try {
-      // 1. Synchronize screenshot with Bunny CDN
-      const cloudUrl = await uploadToBunny(selectedFile, 'payments', (percent) => setUploadPercent(percent));
-      
-      // 2. Transmit payment record to Root Academic Node
-      // The userId must match the authenticated currentUser.uid exactly for rule validation
-      await addDoc(collection(db, 'payments'), {
-        userId: currentUser.uid, 
-        userName: user.name,
-        planId: selectedPlan.id,
-        planName: selectedPlan.name,
-        referenceId: refCode.trim(),
-        screenshot: cloudUrl,
-        status: 'pending',
-        timestamp: new Date().toISOString()
-      });
-      
-      alert("Evidence Transmission Successful: Academic Hub will verify within 1-2 cycles.");
-      setActiveTab('history');
-      setRefCode('');
-      setSelectedFile(null);
-      setScreenshotPreview(null);
-    } catch (e: any) { 
-      console.error("Transmission Node Error:", e);
-      setSyncError(`Node Synchronization Failure: ${e.message || "Unknown Security Violation"}`);
-    } finally { 
-      setIsSubmitting(false); 
-      setUploadPercent(0);
-    }
+      const result = await analyzeAcademicImage(visionPreview, visionImage.type, visionQuery);
+      setVisionResult(result || "Analysis inconclusive.");
+    } catch (e) {
+      alert("Vision Node Error.");
+    } finally { setIsLoading(false); }
   };
 
-  const filteredPlans = availablePlans.filter(p => p.targetProgram === 'All Programs' || p.targetProgram === user.program);
-  const currentQr = selectedMethod === 'esewa' ? sysSettings.esewaQrUrl : sysSettings.khaltiQrUrl;
-  const sanitizedQr = sanitizeUrl(currentQr || '');
+  const handleTheatreGenerate = async () => {
+    alert("Simulation Theatre requires Veo 3.1 API (Disabled in Groq Mode).");
+  };
 
   return (
-    <div className="space-y-8 animate-in pb-24 max-w-6xl mx-auto px-4 md:px-0">
-      <header>
-        <p className="text-blue-600 text-[10px] font-black uppercase tracking-[0.4em] mb-1">Infrastructure Access</p>
-        <h1 className="text-3xl md:text-5xl font-black uppercase tracking-tight dark:text-white leading-none text-slate-900">Tier Selection</h1>
+    <div className="max-w-6xl mx-auto space-y-8 animate-in pb-24 relative transition-colors">
+      <header className="flex flex-col md:flex-row justify-between items-start md:items-end gap-6 mb-12">
+        <div className="space-y-2">
+          <p className="text-blue-600 dark:text-blue-400 text-[10px] font-black uppercase tracking-[0.4em] mb-1">Academic Lab Node</p>
+          <h1 className="text-3xl md:text-5xl font-black tracking-tight leading-none text-slate-900 dark:text-white uppercase italic">
+            {labMode === 'audit' ? 'Audit Lab' : labMode === 'vision' ? 'Vision Lab' : 'Theatre'}
+          </h1>
+        </div>
+        <div className="flex bg-slate-100 dark:bg-slate-900 p-1.5 rounded-[24px] border border-slate-200 dark:border-slate-800 shadow-sm overflow-x-auto scrollbar-hide">
+           {(['audit', 'vision', 'theatre'] as const).map(mode => (
+             <button 
+               key={mode} 
+               onClick={() => setLabMode(mode)}
+               className={`px-6 py-2.5 rounded-full whitespace-nowrap text-[9px] font-black uppercase tracking-widest transition-all ${labMode === mode ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-500 hover:text-slate-900 dark:hover:text-white'}`}
+             >
+               {mode}
+             </button>
+           ))}
+        </div>
       </header>
 
-      <div className="flex bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-1.5 rounded-[24px] shadow-sm max-w-md">
-        {(['plans', 'pay', 'history'] as const).map(tab => (
-          <button 
-            key={tab} 
-            onClick={() => { setActiveTab(tab); setSyncError(null); }}
-            className={`flex-1 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all ${activeTab === tab ? 'bg-blue-600 text-white shadow-xl shadow-blue-500/20' : 'text-slate-500 dark:text-slate-400'}`}
-          >
-            {tab === 'plans' ? 'Plans' : tab === 'pay' ? 'Scan Proof' : 'History'}
-          </button>
-        ))}
-      </div>
-
-      {activeTab === 'plans' && (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          {filteredPlans.length === 0 ? (
-            <div className="col-span-full py-20 text-center opacity-30 text-2xl font-black uppercase">No Tiers Configured</div>
-          ) : filteredPlans.map(plan => (
-            <div key={plan.id} className={`bg-white dark:bg-slate-900 border rounded-[48px] flex flex-col relative overflow-hidden transition-all hover:shadow-2xl ${plan.isPopular ? 'border-blue-500 shadow-blue-500/10' : 'border-slate-100 dark:border-slate-800 shadow-sm'}`}>
-              {plan.imageUrl && (
-                <div className="w-full h-40 overflow-hidden border-b border-slate-50 dark:border-slate-800">
-                  <img src={sanitizeUrl(plan.imageUrl)} className="w-full h-full object-cover" alt={plan.name} />
+      {labMode === 'audit' && scenario && (
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 animate-in">
+           <div className="lg:col-span-12 flex justify-end mb-4">
+              <button onClick={startNewCase} disabled={isLoading} className="bg-blue-600 text-white px-8 py-4 rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-xl">Synthesize Case</button>
+           </div>
+           <div className="lg:col-span-4 space-y-6">
+              <div className="bg-white dark:bg-slate-900 p-8 rounded-[40px] border border-slate-100 dark:border-slate-800">
+                 <p className="text-[9px] font-black text-blue-500 uppercase mb-4">Patient HUD</p>
+                 <h3 className="text-xl font-black dark:text-white uppercase mb-4">{scenario.patientName}</h3>
+                 <p className="text-xs font-bold text-slate-500 leading-relaxed italic">"{scenario.history}"</p>
+              </div>
+           </div>
+           <div className="lg:col-span-8 bg-slate-50 dark:bg-slate-900 p-8 rounded-[48px] border border-slate-200 dark:border-slate-800 shadow-inner">
+              <h3 className="text-2xl font-serif italic mb-8">Study Orders</h3>
+              <div className="space-y-4">
+                 {scenario.prescriptions.map((p: any) => (
+                    <button key={p.id} onClick={() => handleAudit(p.id)} className={`w-full text-left p-6 rounded-3xl border-2 transition-all ${selectedDrug === p.id ? (p.isErroneous ? 'bg-red-50 border-red-500' : 'bg-slate-100 border-slate-300') : 'bg-white dark:bg-slate-800 border-transparent hover:border-slate-200'}`}>
+                       <h4 className="font-black dark:text-white uppercase">{p.drug}</h4>
+                       <p className="text-xs text-slate-400 font-bold">{p.dose} • {p.frequency}</p>
+                    </button>
+                 ))}
+              </div>
+              {feedback && (
+                <div className={`mt-8 p-6 rounded-2xl border-2 ${feedback.isCorrect ? 'bg-green-50 border-green-500 text-green-700' : 'bg-red-50 border-red-500 text-red-700'}`}>
+                  <p className="text-[10px] font-black uppercase mb-1">{feedback.isCorrect ? '✓ Finding Confirmed' : '❌ Analysis Error'}</p>
+                  <p className="text-xs font-bold">{feedback.message}</p>
                 </div>
               )}
-              <div className="p-10 flex flex-col flex-1">
-                <h3 className="text-xl font-black uppercase mb-2 dark:text-white">{plan.name}</h3>
-                <div className="mb-8"><span className="text-4xl font-black text-slate-900 dark:text-white">NPR {plan.price}</span><span className="text-slate-500 text-xs uppercase ml-2">/ {plan.duration}</span></div>
-                <ul className="space-y-4 mb-10 flex-1">
-                  {plan.features.map((f, i) => <li key={i} className="flex gap-3 text-slate-600 dark:text-slate-400 text-xs font-bold uppercase tracking-wide"><span className="text-blue-500">✓</span> {f}</li>)}
-                </ul>
-                <button onClick={() => handleSelectPlan(plan)} className={`w-full py-4 rounded-2xl font-black text-[10px] uppercase transition-all ${plan.isPopular ? 'bg-blue-600 text-white' : 'bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-300 hover:bg-blue-600 hover:text-white'}`}>Select Tier</button>
-              </div>
-            </div>
-          ))}
+           </div>
         </div>
       )}
 
-      {activeTab === 'pay' && (
-        !selectedPlan ? (
-          <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 p-12 rounded-[56px] text-center animate-in flex flex-col items-center">
-             <div className="w-20 h-20 bg-blue-50 dark:bg-blue-900/20 rounded-3xl flex items-center justify-center text-3xl mb-6">🎫</div>
-             <h3 className="text-2xl font-black uppercase tracking-tight dark:text-white">No Tier Selected</h3>
-             <p className="text-slate-500 text-xs font-bold uppercase tracking-widest mt-2 max-w-sm mb-8 leading-relaxed">Please select a subscription plan from the "Plans" tab before scanning payment proof.</p>
-             <button onClick={() => setActiveTab('plans')} className="px-10 py-4 bg-blue-600 text-white rounded-2xl font-black uppercase tracking-widest text-[10px] shadow-xl active:scale-95 transition-all">Go to Plans</button>
-          </div>
-        ) : (
-          <div className="space-y-8 animate-in">
-            {syncError && (
-              <div className="bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-900/30 p-6 rounded-[32px] animate-in flex items-center gap-4">
-                 <div className="w-10 h-10 bg-red-600/10 rounded-full flex items-center justify-center shrink-0">⚠️</div>
-                 <p className="text-red-600 dark:text-red-400 text-xs font-black uppercase tracking-tight">{syncError}</p>
+      {labMode === 'vision' && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 animate-in">
+           <div className="space-y-6">
+              <div onClick={() => visionInputRef.current?.click()} className="w-full aspect-[4/3] bg-white dark:bg-slate-900 border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-[48px] flex items-center justify-center cursor-pointer overflow-hidden group">
+                 <input ref={visionInputRef} type="file" className="hidden" onChange={e => { const file = e.target.files?.[0]; if(file) { setVisionImage(file); const r = new FileReader(); r.onload = () => setVisionPreview(r.result as string); r.readAsDataURL(file); }}} />
+                 {visionPreview ? <img src={visionPreview} className="w-full h-full object-contain" /> : <div className="text-center"><span className="text-4xl block mb-2">📸</span><p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Attach Academic Image</p></div>}
               </div>
-            )}
-            
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-10 rounded-[48px] shadow-sm space-y-8">
-                <div className="flex justify-between items-start">
-                  <h2 className="text-xl font-black uppercase tracking-tight dark:text-white">1. Secure Destination</h2>
-                  <div className="text-right">
-                      <p className="text-[8px] font-black text-slate-400 uppercase">Tier Selected</p>
-                      <p className="text-sm font-black text-blue-600 uppercase">{selectedPlan.name}</p>
-                  </div>
-                </div>
-                <div className="flex gap-2 bg-slate-50 dark:bg-slate-950 p-1.5 rounded-[20px]">
-                  <button onClick={() => { setSelectedMethod('esewa'); setQrLoading(true); }} className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase transition-all ${selectedMethod === 'esewa' ? 'bg-white dark:bg-slate-800 text-blue-600 shadow-sm' : 'text-slate-400'}`}>eSewa</button>
-                  <button onClick={() => { setSelectedMethod('khalti'); setQrLoading(true); }} className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase transition-all ${selectedMethod === 'khalti' ? 'bg-white dark:bg-slate-800 text-blue-600 shadow-sm' : 'text-slate-400'}`}>Khalti</button>
-                </div>
-                <div className="text-center p-8 bg-slate-50 dark:bg-slate-950 rounded-[32px] border border-slate-100 dark:border-white/5 space-y-6">
-                  <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest">GATEWAY: {selectedMethod === 'esewa' ? sysSettings.esewaNumber : sysSettings.khaltiNumber || 'ID PENDING'}</p>
-                  <div className="w-56 h-56 mx-auto bg-white rounded-[32px] p-4 shadow-2xl relative flex items-center justify-center overflow-hidden border border-slate-100">
-                    {qrLoading && <div className="absolute inset-0 bg-slate-50 flex items-center justify-center"><div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div></div>}
-                    {sanitizedQr ? (
-                      <img 
-                        src={sanitizedQr} 
-                        onLoad={() => setQrLoading(false)}
-                        onError={() => setQrLoading(false)}
-                        className={`w-full h-full object-contain transition-opacity duration-500 ${qrLoading ? 'opacity-0' : 'opacity-100'}`} 
-                        alt="Payment QR" 
-                      />
-                    ) : (
-                      <div className="text-[8px] font-black text-slate-400 uppercase text-center px-4">Node Error:<br/>QR Missing</div>
-                    )}
-                  </div>
-                  <p className="text-lg font-black text-slate-900 dark:text-white tracking-tight mt-4">NPR {selectedPlan.price}</p>
-                  <p className="text-[8px] font-bold text-slate-400 uppercase italic">Scan with official mobile app</p>
-                </div>
+              <textarea value={visionQuery} onChange={e => setVisionQuery(e.target.value)} className="w-full h-24 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 text-xs font-bold dark:text-white outline-none" />
+              <button onClick={handleVisionAnalysis} disabled={isLoading || !visionPreview} className="w-full py-5 bg-blue-600 text-white rounded-2xl font-black uppercase text-[10px] tracking-widest shadow-xl shadow-blue-600/20 active:scale-95 disabled:opacity-50 transition-all">
+                {isLoading ? 'Synchronizing Llama Vision...' : 'Initiate Llama Analysis'}
+              </button>
+           </div>
+           <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 p-10 rounded-[56px] min-h-[300px] shadow-sm relative overflow-hidden">
+              <div className="absolute top-0 right-0 p-6">
+                <span className="px-3 py-1 bg-purple-600 text-white text-[7px] font-black rounded-full uppercase tracking-widest">Llama 3.2 Vision Node</span>
               </div>
-              
-              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-10 rounded-[48px] shadow-sm">
-                <h2 className="text-xl font-black uppercase tracking-tight dark:text-white mb-8">2. Academic Evidence</h2>
-                <div className="space-y-6">
-                    <div className="space-y-2">
-                      <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">Reference Code</label>
-                      <input value={refCode} onChange={e => setRefCode(e.target.value)} className="w-full h-16 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 px-6 rounded-2xl text-sm font-bold dark:text-white outline-none focus:ring-4 ring-blue-500/5 transition-all" placeholder="Transaction ID" />
-                    </div>
-                    <div className="space-y-2">
-                      <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">Screenshot Evidence</label>
-                      <label className="w-full aspect-video bg-slate-50 dark:bg-slate-950 border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-3xl flex flex-col items-center justify-center cursor-pointer overflow-hidden transition-all hover:border-blue-500 group relative">
-                          <input type="file" accept="image/*" className="hidden" onChange={handleScreenshotChange} />
-                          {screenshotPreview ? (
-                            <img src={screenshotPreview} className="w-full h-full object-cover" alt="Proof Preview" />
-                          ) : (
-                            <div className="text-center space-y-2">
-                                <span className="text-2xl group-hover:scale-125 transition-transform block">📸</span>
-                                <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Attach Receipt</span>
-                            </div>
-                          )}
-                      </label>
-                    </div>
-                    
-                    {isSubmitting && (
-                      <div className="space-y-2">
-                        <div className="flex justify-between items-center"><span className="text-[8px] font-black uppercase text-blue-500">Transmitting Node Data</span><span className="text-[8px] font-black text-blue-500">{uploadPercent}%</span></div>
-                        <div className="h-1.5 w-full bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
-                          <div className="h-full bg-blue-600 transition-all duration-300" style={{ width: `${uploadPercent}%` }}></div>
-                        </div>
-                      </div>
-                    )}
+              <p className="text-xs font-black text-blue-500 uppercase tracking-widest mb-6">Neural Academic Report</p>
+              <p className="text-sm font-medium leading-relaxed dark:text-slate-300 whitespace-pre-wrap">{visionResult || "Awaiting multi-modal satellite link..."}</p>
+           </div>
+        </div>
+      )}
 
-                    <button onClick={handleSubmitPayment} disabled={isSubmitting} className="w-full bg-blue-600 text-white font-black h-16 md:h-20 rounded-[28px] uppercase text-[10px] tracking-widest shadow-xl active:scale-95 transition-all disabled:opacity-50">
-                      {isSubmitting ? 'TRANSMITTING...' : 'SYNCHRONIZE PAYMENT'}
+      {labMode === 'theatre' && (
+        <div className="space-y-8 animate-in">
+           <div className="bg-slate-950 border border-white/5 p-10 md:p-14 rounded-[56px] shadow-2xl relative overflow-hidden flex flex-col items-center text-center">
+              <div className="absolute top-0 left-0 w-full h-full bg-blue-600/5 blur-[120px] pointer-events-none"></div>
+              <div className="relative z-10 max-w-xl space-y-8">
+                 <div className="w-20 h-20 bg-blue-600 rounded-3xl flex items-center justify-center text-4xl shadow-2xl mx-auto border border-white/10 animate-pulse">🎬</div>
+                 <h2 className="text-3xl md:text-5xl font-black text-white uppercase tracking-tighter italic">Simulation Theatre</h2>
+                 <p className="text-slate-400 text-xs font-bold uppercase tracking-widest leading-relaxed">Enter an academic scenario to generate a high-fidelity visualization (Feature requires Veo API - Currently Disabled).</p>
+                 
+                 <div className="flex gap-3 bg-white/5 p-2 rounded-[32px] border border-white/10 focus-within:border-blue-500/50 transition-all shadow-inner">
+                    <input value={theatrePrompt} onChange={e => setTheatrePrompt(e.target.value)} placeholder="Describe an academic procedure..." className="flex-1 bg-transparent border-none focus:ring-0 text-sm px-6 text-white placeholder-slate-700 font-bold" />
+                    <button onClick={handleTheatreGenerate} disabled={isLoading} className="w-16 h-16 bg-blue-600 disabled:bg-slate-800 rounded-2xl flex items-center justify-center text-white shadow-2xl transition-all">
+                       <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M5 3l14 9-14 9V3z"/></svg>
                     </button>
-                    <p className="text-[8px] text-center font-bold text-slate-400 uppercase tracking-widest">Data is transmitted via secure academic node</p>
-                </div>
-              </div>
-            </div>
-          </div>
-        )
-      )}
+                 </div>
 
-      {activeTab === 'history' && (
-        <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 p-12 rounded-[56px] text-center animate-in">
-           <div className="w-20 h-20 bg-blue-50 dark:bg-blue-900/20 rounded-3xl flex items-center justify-center text-3xl mx-auto mb-6">⏳</div>
-           <h3 className="text-2xl font-black uppercase tracking-tight dark:text-white">Queue Synchronizing</h3>
-           <p className="text-slate-500 text-xs font-bold uppercase tracking-widest mt-2 max-w-sm mx-auto leading-relaxed">Your payment evidence is being processed by the root moderation node. Refreshing cycle is 1-2 hours.</p>
+                 {isLoading && (
+                   <div className="space-y-4 animate-in">
+                      <div className="w-full h-1.5 bg-white/5 rounded-full overflow-hidden">
+                        <div className="h-full bg-blue-600 animate-[progress_15s_ease-in-out_infinite]" style={{width: '60%'}}></div>
+                      </div>
+                      <p className="text-[10px] font-black text-blue-400 uppercase tracking-widest">{progressMsg}</p>
+                   </div>
+                 )}
+              </div>
+
+              {videoUrl && (
+                <div className="mt-12 w-full max-w-4xl aspect-video bg-black rounded-[40px] overflow-hidden border border-white/10 shadow-[0_0_100px_rgba(0,0,0,0.5)] animate-in">
+                   <video src={videoUrl} controls className="w-full h-full object-cover" />
+                </div>
+              )}
+           </div>
         </div>
       )}
+      <style>{`@keyframes progress { 0% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }`}</style>
+      <div className="pb-10">
+        <GovernmentDisclaimer />
+      </div>
     </div>
   );
 };
 
-export default Plans;
+export default PracticalLab;

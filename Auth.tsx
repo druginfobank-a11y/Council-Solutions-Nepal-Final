@@ -1,19 +1,32 @@
-// Fix: Use namespace import for firebase/app to resolve named export error
-import * as firebase from "firebase/app";
-import { getAuth } from "firebase/auth";
-import { getFirestore } from "firebase/firestore";
+import { db } from './firebase';
+import { collection, doc, getDocs, setDoc, deleteDoc, onSnapshot, query } from 'firebase/firestore';
+import { Plan } from '../types';
 
-const { initializeApp } = firebase as any;
+const PLANS_COLLECTION = 'plans';
 
-const firebaseConfig = {
-  apiKey: "AIzaSyCWFxGttlPGUX9-BPfl1H0p6CN_zRKEuCU",
-  authDomain: "councilcrack.firebaseapp.com",
-  projectId: "councilcrack",
-  storageBucket: "councilcrack.firebasestorage.app",
-  messagingSenderId: "325806144910",
-  appId: "1:325806144910:web:e983123e993a8e5a6e78df"
+export const getPlans = async (): Promise<Plan[]> => {
+  const snapshot = await getDocs(collection(db, PLANS_COLLECTION));
+  return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Plan));
 };
 
-const app = initializeApp(firebaseConfig);
-export const auth = getAuth(app);
-export const db = getFirestore(app);
+export const subscribeToPlans = (callback: (plans: Plan[]) => void, onError?: (error: any) => void) => {
+  const q = query(collection(db, PLANS_COLLECTION));
+  return onSnapshot(q, 
+    (snapshot) => {
+      const plans = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Plan));
+      callback(plans);
+    },
+    (error) => {
+      console.error("Plans subscription error:", error);
+      if (onError) onError(error);
+    }
+  );
+};
+
+export const savePlanToCloud = async (plan: Partial<Plan> & { id: string }) => {
+  await setDoc(doc(db, PLANS_COLLECTION, plan.id), plan, { merge: true });
+};
+
+export const deletePlanFromCloud = async (id: string) => {
+  await deleteDoc(doc(db, PLANS_COLLECTION, id));
+};

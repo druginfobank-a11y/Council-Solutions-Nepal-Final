@@ -1,313 +1,192 @@
-
-import OpenAI from "openai";
-import { db } from "./firebase";
-import { doc, getDoc, setDoc } from "firebase/firestore";
+import { jsPDF } from "jspdf";
+import "jspdf-autotable";
+import { ExamResult, Quiz } from "../types";
 
 /**
- * GROQ CLIENT INITIALIZATION
- * Groq provides high-speed Llama 3 models with a generous free tier.
+ * Utility to convert image URL to Base64 for PDF placement
  */
-const getGroqClient = () => {
-  const key = String(
-    process.env.GROQ_API_KEY || 
-    (import.meta as any).env?.VITE_GROQ_API_KEY || 
-    ""
-  );
-  
-  if (!key || key.length < 5) {
-    console.error("Groq API Key is missing. Please set GROQ_API_KEY in your environment.");
-    throw new Error("AUTHORIZATION_REQUIRED");
-  }
-
-  return new OpenAI({
-    apiKey: key,
-    dangerouslyAllowBrowser: true,
-    baseURL: "https://api.groq.com/openai/v1"
+const getBase64ImageFromURL = (url: string): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.setAttribute("crossOrigin", "anonymous");
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = img.width;
+      canvas.height = img.height;
+      const ctx = canvas.getContext("2d");
+      ctx?.drawImage(img, 0, 0);
+      const dataURL = canvas.toDataURL("image/png");
+      resolve(dataURL);
+    };
+    img.onerror = (error) => reject(error);
+    img.src = url;
   });
 };
 
-// Helper to hash strings for cache keys
-const hashString = (str: string) => {
-  let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    const char = str.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash = hash & hash;
-  }
-  return Math.abs(hash).toString(36);
-};
+export const generateQuizReport = async (quiz: Quiz, results: ExamResult[], logoUrl?: string) => {
+  const doc = new jsPDF();
+  const timestamp = new Date().toLocaleString();
+  const examDate = quiz.scheduledDate ? new Date(quiz.scheduledDate).toLocaleDateString() : new Date().toLocaleDateString();
 
-const getCache = async (collection: string, key: string) => {
-  try {
-    const cacheRef = doc(db, "ai_cache", `${collection}_${hashString(key)}`);
-    const snap = await getDoc(cacheRef);
-    if (snap.exists()) {
-      const data = snap.data();
-      const isExpired = (Date.now() - data.timestamp) > (7 * 24 * 60 * 60 * 1000);
-      if (!isExpired) return data.response;
+  let yPos = 20;
+
+  if (logoUrl) {
+    try {
+      const base64Logo = await getBase64ImageFromURL(logoUrl);
+      doc.addImage(base64Logo, "PNG", 95, 12, 20, 20);
+      yPos = 42;
+    } catch (e) {
+      yPos = 30;
     }
-  } catch (e) {
-    console.warn("Cache read fault:", e);
   }
-  return null;
-};
 
-const setCache = async (collection: string, key: string, response: any) => {
-  try {
-    const cacheRef = doc(db, "ai_cache", `${collection}_${hashString(key)}`);
-    await setDoc(cacheRef, {
-      response,
-      timestamp: Date.now(),
-      originalKey: key.substring(0, 100)
-    });
-  } catch (e) {
-    console.warn("Cache write fault:", e);
-  }
-};
-
-const handleAIError = (error: any) => {
-  const errorMsg = String(error?.message || "Connectivity interruption.");
-  const msg = errorMsg.toUpperCase();
+  doc.setFontSize(22);
+  doc.setTextColor(30, 41, 59);
+  doc.setFont("helvetica", "bold");
+  doc.text("COUNCIL SOLUTIONS NEPAL", 105, yPos, { align: 'center' });
   
-  if (msg.includes("API_KEY") || msg.includes("401")) {
-    throw new Error("AUTHORIZATION_REQUIRED");
-  }
-  if (msg.includes("RATE_LIMIT") || msg.includes("429")) {
-    throw new Error("GROQ_LIMIT_EXCEEDED: Free tier limit reached. Please wait a minute or upgrade your key.");
-  }
-  throw new Error(`AI_NODE_FAULT: ${errorMsg}`);
-};
+  yPos += 8;
+  doc.setFontSize(10);
+  doc.setTextColor(100);
+  doc.setFont("helvetica", "normal");
+  doc.text("OFFICIAL COHORT PERFORMANCE TRANSCRIPT", 105, yPos, { align: 'center' });
 
-/** 
- * MCQ SYNTHESIS NODE (Llama 3.3 70B)
- */
-export const generateMCQs = async (
-  topic: string, 
-  count: number = 10, 
-  program: string = 'Diploma', 
-  council: string = 'General', 
-  subject?: string, 
-  fileData?: { data: string, mimeType: string }, 
-  difficulty: string = 'Medium',
-  unit?: string,
-  language: 'ENG' | 'NEP' = 'ENG'
-) => {
-  const cacheKey = `groq_mcqs_${topic}_${count}_${program}_${council}_${subject}_${difficulty}_${language}`;
-  const cached = await getCache("mcqs", cacheKey);
-  if (cached && !fileData) return cached;
-
-  const groq = getGroqClient();
+  yPos += 12;
+  doc.setDrawColor(226, 232, 240);
+  doc.setLineWidth(0.5);
+  doc.line(14, yPos, 196, yPos);
   
-  try {
-    const systemPrompt = `You are a professional medical/engineering examiner for Nepalese Councils (${council}). Generate ${count} high-yield MCQs.
-    Difficulty: ${difficulty}.
-    Language: ${language === 'NEP' ? 'Nepali (Unicode)' : 'English'}.
-    Return ONLY a JSON array of objects.
-    Schema: [{"question": "...", "options": ["A", "B", "C", "D"], "correctAnswer": 0, "explanation": "..."}]`;
+  yPos += 10;
+  doc.setFontSize(10);
+  doc.setTextColor(71, 85, 105);
+  
+  doc.setFont("helvetica", "bold");
+  doc.text("PROGRAM:", 14, yPos);
+  doc.setFont("helvetica", "normal");
+  doc.text(quiz.program.toUpperCase(), 40, yPos);
 
-    const userPrompt = fileData 
-      ? `Analyze the attached context and generate ${count} questions based on it. Topic: ${topic}.`
-      : `Generate ${count} questions about: ${topic}. Program: ${program}. Subject: ${subject || 'General'}. Unit: ${unit || 'N/A'}.`;
+  doc.setFont("helvetica", "bold");
+  doc.text("EXAM DATE:", 120, yPos);
+  doc.setFont("helvetica", "normal");
+  doc.text(examDate, 150, yPos);
 
-    const messages: any[] = [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: userPrompt }
-    ];
+  yPos += 6;
+  doc.setFont("helvetica", "bold");
+  doc.text("ASSESSMENT:", 14, yPos);
+  doc.setFont("helvetica", "normal");
+  doc.text(quiz.title.toUpperCase(), 45, yPos);
 
-    // If there's an image, use Llama 3.2 Vision
-    const model = fileData?.mimeType.startsWith('image/') ? "llama-3.2-11b-vision-preview" : "llama-3.3-70b-versatile";
-    
-    if (fileData?.mimeType.startsWith('image/')) {
-      messages[1].content = [
-        { type: "text", text: userPrompt },
-        { type: "image_url", image_url: { url: fileData.data } }
-      ];
-    }
+  yPos += 8;
+  doc.line(14, yPos, 196, yPos);
 
-    const completion = await groq.chat.completions.create({
-      messages,
-      model,
-      response_format: { type: "json_object" },
-      temperature: 0.7
-    });
+  const tableData = results.map((res, index) => [
+    index + 1,
+    res.userName.toUpperCase(),
+    res.score,
+    res.totalQuestions,
+    `${res.percentage.toFixed(1)}%`,
+    res.percentage >= 80 ? 'DISTINCTION' : res.percentage >= 50 ? 'PASS' : 'FAIL'
+  ]);
 
-    const content = completion.choices[0].message.content;
-    const result = JSON.parse(content || "{}");
-    const mcqs = Array.isArray(result) ? result : (result.mcqs || result.questions || result.data || []);
-    
-    if (mcqs.length > 0) {
-      if (!fileData) await setCache("mcqs", cacheKey, mcqs);
-      return mcqs;
-    }
-    throw new Error("Empty AI response.");
-  } catch (e) {
-    throw handleAIError(e);
-  }
-};
+  (doc as any).autoTable({
+    startY: yPos + 10,
+    head: [['Rank', 'Practitioner Name', 'Marks', 'Total', 'Mastery', 'Status']],
+    body: tableData,
+    theme: 'grid',
+    headStyles: { fillColor: [30, 41, 59], textColor: [255, 255, 255], fontStyle: 'bold', halign: 'center' },
+    styles: { fontSize: 9, cellPadding: 4 },
+    columnStyles: { 0: { halign: 'center' }, 2: { halign: 'center' }, 3: { halign: 'center' }, 4: { halign: 'center' }, 5: { halign: 'center', fontStyle: 'bold' } },
+    alternateRowStyles: { fillColor: [248, 250, 252] },
+  });
 
-/** 
- * AI TUTOR RESPONSE NODE (Llama 3.3 70B)
- */
-export const getTutorResponse = async (
-  query: string, 
-  history: { role: 'user' | 'model', content: string }[] = [],
-  context?: { program: string, council: string }
-) => {
-  const cacheKey = `groq_tutor_${query}_${context?.program}_${context?.council}`;
-  if (history.length === 0) {
-    const cached = await getCache("tutor", cacheKey);
-    if (cached) return cached;
+  const pageCount = (doc as any).internal.getNumberOfPages();
+  for (let i = 1; i <= pageCount; i++) {
+    doc.setPage(i);
+    doc.setFontSize(8);
+    doc.setTextColor(148, 163, 184);
+    doc.text(`Generated by CSN System Node: ${timestamp}`, 14, 285);
+    doc.text(`Page ${i} of ${pageCount}`, 105, 285, { align: 'center' });
+    doc.text(`Verification ID: ${quiz.id.substring(0,8).toUpperCase()}`, 196, 285, { align: 'right' });
   }
 
-  const groq = getGroqClient();
-  try {
-    const systemInstruction = `You are a specialized academic tutor for Nepalese Educational Councils (NPC, NMC, NNC, NHPC, NEC). 
-    Support English and Nepali. Be concise, professional, and accurate. 
-    Current Context: ${context?.council} - ${context?.program}.`;
+  doc.save(`CohortReport_${quiz.program.replace(/\s+/g, '_')}_${Date.now()}.pdf`);
+};
 
-    const completion = await groq.chat.completions.create({
-      messages: [
-        { role: "system", content: systemInstruction },
-        ...history.map(m => ({ role: m.role === 'model' ? 'assistant' : 'user' as any, content: m.content })),
-        { role: "user", content: query }
-      ],
-      model: "llama-3.3-70b-versatile",
-    });
+export const generateIndividualTranscript = async (quiz: Quiz, result: ExamResult, logoUrl?: string) => {
+  const doc = new jsPDF();
+  const timestamp = new Date().toLocaleString();
 
-    const result = { text: String(completion.choices[0].message.content || ""), node: 'llama-3.3-70b' };
-    if (history.length === 0) await setCache("tutor", cacheKey, result);
-    return result;
-  } catch (e) {
-    throw handleAIError(e);
+  // 1. Header & Logo
+  if (logoUrl) {
+    try {
+      const base64Logo = await getBase64ImageFromURL(logoUrl);
+      doc.addImage(base64Logo, "PNG", 14, 15, 25, 25);
+    } catch (e) {}
   }
-};
 
-/**
- * IMAGE ANALYSIS (Llama 3.2 Vision)
- */
-export const analyzeAcademicImage = async (base64Image: string, mimeType: string, query: string) => {
-  const groq = getGroqClient();
-  try {
-    const completion = await groq.chat.completions.create({
-      messages: [
-        {
-          role: "user",
-          content: [
-            { type: "text", text: `Academic Analysis Request: ${query}` },
-            { type: "image_url", image_url: { url: base64Image } }
-          ]
-        }
-      ],
-      model: "llama-3.2-11b-vision-preview",
-    });
-    return String(completion.choices[0].message.content || "");
-  } catch (e) {
-    throw handleAIError(e);
-  }
-};
+  doc.setFontSize(24);
+  doc.setTextColor(37, 99, 235); // blue-600
+  doc.setFont("helvetica", "bold");
+  doc.text("COUNCIL SOLUTIONS NEPAL", 45, 25);
+  
+  doc.setFontSize(10);
+  doc.setTextColor(100);
+  doc.setFont("helvetica", "normal");
+  doc.text("OFFICIAL INDIVIDUAL EVALUATION RECORD", 45, 32);
 
-/**
- * AUDIO BRIEFING (Browser Native TTS - Free)
- */
-export const generateAudioBriefing = async (text: string) => {
-  return text;
-};
+  // 2. Student Info Box
+  doc.setDrawColor(200);
+  doc.rect(14, 50, 182, 40);
+  doc.setFontSize(12);
+  doc.setTextColor(30, 41, 59);
+  doc.setFont("helvetica", "bold");
+  doc.text("PRACTITIONER IDENTITY", 20, 60);
+  
+  doc.setFontSize(10);
+  doc.setFont("helvetica", "normal");
+  doc.text(`Name: ${result.userName.toUpperCase()}`, 20, 70);
+  doc.text(`Program: ${result.program}`, 20, 78);
+  doc.text(`Council: ${result.council}`, 20, 86);
+  
+  doc.text(`Examination Date: ${new Date(result.timestamp).toLocaleDateString()}`, 110, 70);
+  doc.text(`Node Reference: ${result.id.substring(0,10).toUpperCase()}`, 110, 78);
 
-// Helper for UI to trigger native TTS
-export const speakText = (text: string, onEnd?: () => void) => {
-  if (!('speechSynthesis' in window)) return;
-  window.speechSynthesis.cancel();
-  const utterance = new SpeechSynthesisUtterance(text);
-  utterance.rate = 1.0;
-  utterance.pitch = 1.0;
-  utterance.onend = onEnd || null;
-  const voices = window.speechSynthesis.getVoices();
-  const preferredVoice = voices.find(v => v.name.includes('Google') && v.lang.includes('en')) || voices[0];
-  if (preferredVoice) utterance.voice = preferredVoice;
-  window.speechSynthesis.speak(utterance);
-};
+  // 3. Performance Breakdown
+  doc.setFontSize(14);
+  doc.setFont("helvetica", "bold");
+  doc.text("ASSESSMENT SUMMARY", 14, 110);
+  doc.setFontSize(10);
+  doc.setFont("helvetica", "normal");
+  doc.text(quiz.title.toUpperCase(), 14, 116);
 
-/**
- * NEWS FETCH (Static/Mock since Groq doesn't have Search Grounding for free)
- */
-export const fetchLiveCouncilNews = async () => {
-  return [
-    { 
-      title: "Council Update Node", 
-      content: "Official notices are synchronized daily. Please check the respective council websites (NMC/NPC/NNC) for the latest PDF bulletins.", 
-      date: new Date().toLocaleDateString(), 
-      citations: [] 
-    }
-  ];
-};
+  (doc as any).autoTable({
+    startY: 125,
+    head: [['Component', 'Result']],
+    body: [
+      ['Items Correct', result.score.toString()],
+      ['Total Evaluation Items', result.totalQuestions.toString()],
+      ['Mastery Percentage', `${result.percentage.toFixed(2)}%`],
+      ['Academic Status', result.percentage >= 50 ? 'SATISFACTORY' : 'UNSATISFACTORY']
+    ],
+    theme: 'striped',
+    headStyles: { fillColor: [37, 99, 235] },
+    columnStyles: { 0: { fontStyle: 'bold', cellWidth: 80 } }
+  });
 
-/**
- * STUDY PLAN GENERATION
- */
-export const generateStudyPlan = async (objective: string) => {
-  const groq = getGroqClient();
-  try {
-    const completion = await groq.chat.completions.create({
-      messages: [
-        { role: "system", content: "Generate a structured study plan in JSON format: {assessment, academicObjective, interventions: [], expectedOutcome}" },
-        { role: "user", content: `Objective: ${objective}` }
-      ],
-      model: "llama-3.3-70b-versatile",
-      response_format: { type: "json_object" }
-    });
-    return JSON.parse(completion.choices[0].message.content || "{}");
-  } catch (e) {
-    throw handleAIError(e);
-  }
-};
+  // 4. Authenticity Seal
+  doc.setDrawColor(37, 99, 235);
+  doc.setLineWidth(1);
+  doc.circle(170, 230, 20);
+  doc.setFontSize(8);
+  doc.text("OFFICIAL", 170, 227, { align: 'center' });
+  doc.text("CSN NEPAL", 170, 233, { align: 'center' });
+  doc.text("VERIFIED", 170, 239, { align: 'center' });
 
-/**
- * EXAM COUNTDOWN TASKS
- */
-export const generateStudyCountdown = async (weaknesses: Record<string, number>, program: string) => {
-  const groq = getGroqClient();
-  try {
-    const completion = await groq.chat.completions.create({
-      messages: [
-        { role: "system", content: "Generate a 30-day study schedule JSON array: [{text, priority: 'High'|'Medium'|'Low'}]" },
-        { role: "user", content: `Program: ${program}. Weaknesses: ${JSON.stringify(weaknesses)}` }
-      ],
-      model: "llama-3.3-70b-versatile",
-      response_format: { type: "json_object" }
-    });
-    const result = JSON.parse(completion.choices[0].message.content || "{}");
-    return result.tasks || result.data || result;
-  } catch (e) {
-    throw handleAIError(e);
-  }
-};
+  // 5. Footer
+  doc.setFontSize(8);
+  doc.setTextColor(150);
+  doc.text(`This is a computer-generated transcript synchronized with the CSN Cloud Node. No signature required.`, 105, 275, { align: 'center' });
+  doc.text(`Report Generated: ${timestamp}`, 105, 282, { align: 'center' });
 
-/**
- * FLASHCARDS
- */
-export const generateFlashcards = async (subjects: string, count: number = 5) => {
-  const groq = getGroqClient();
-  try {
-    const completion = await groq.chat.completions.create({
-      messages: [
-        { role: "system", content: "Generate flashcards in JSON array: [{question, answer}]" },
-        { role: "user", content: `Subjects: ${subjects}. Count: ${count}` }
-      ],
-      model: "llama-3.3-70b-versatile",
-      response_format: { type: "json_object" }
-    });
-    const result = JSON.parse(completion.choices[0].message.content || "{}");
-    return result.flashcards || result.data || result;
-  } catch (e) {
-    throw handleAIError(e);
-  }
+  doc.save(`Transcript_${result.userName.replace(/\s+/g, '_')}_${Date.now()}.pdf`);
 };
-
-export const startLiveVivaSession = async () => { throw new Error("Feature requires Gemini Live API (Disabled)"); };
-export const generateAcademicVideo = async () => { throw new Error("Feature requires Veo API (Disabled)"); };
-export const checkTechnicalInteraction = async () => { throw new Error("Feature requires Gemini Reasoning (Disabled)"); };
-export const generateTechnicalDerivation = async () => { throw new Error("Feature requires Gemini Reasoning (Disabled)"); };
-export const generateSolutionMatrix = async () => { throw new Error("Feature requires Gemini Reasoning (Disabled)"); };
-export const generateAcademicScenario = async () => { throw new Error("Feature requires Gemini Reasoning (Disabled)"); };
-export async function startPatientSimulation() { throw new Error("Feature Disabled"); }
-export async function sendPatientMessage() { throw new Error("Feature Disabled"); }

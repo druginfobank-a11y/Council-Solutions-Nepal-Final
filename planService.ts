@@ -1,201 +1,334 @@
 
-import { db } from './firebase';
-import { collection, addDoc, query, where, getDocs, doc, updateDoc, onSnapshot, orderBy, deleteDoc, getDoc, setDoc, limit } from 'firebase/firestore';
-import { Quiz, LearningMaterial, ExamResult } from '../types';
+import { GoogleGenAI, Type, Modality, LiveServerMessage, HarmCategory, HarmBlockThreshold, SafetySetting } from "@google/genai";
 
-export const publishLearningMaterial = async (material: Partial<LearningMaterial>) => {
-  try {
-    const docRef = await addDoc(collection(db, 'materials'), {
-      ...material,
-      status: material.status || 'pending',
-      uploadDate: new Date().toISOString()
-    });
-    return docRef.id;
-  } catch (error) {
-    console.error("Error publishing material:", error);
-    throw error;
+const safetySettings: SafetySetting[] = [
+  { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+  { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
+  { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
+  { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+  { category: HarmCategory.HARM_CATEGORY_CIVIC_INTEGRITY, threshold: HarmBlockThreshold.BLOCK_NONE }
+];
+
+const handleAIError = (error: any) => {
+  const errorMsg = String(error?.message || "Connectivity interruption.");
+  const msg = errorMsg.toUpperCase();
+  
+  if (msg.includes("API_KEY") || msg.includes("401")) {
+    throw new Error("AUTHORIZATION_REQUIRED");
   }
+  if (msg.includes("QUOTA") || msg.includes("429")) {
+    throw new Error("Free limit exceed भयो। भोलि फेरि try गर्नुहोस्।");
+  }
+  throw new Error(`NODE_FAULT: ${errorMsg}`);
 };
 
-export const deleteLearningMaterial = async (id: string) => {
-  try {
-    await deleteDoc(doc(db, 'materials', id));
-  } catch (error) {
-    console.error("Error deleting material:", error);
-    throw error;
-  }
+const getAIClient = () => {
+  const key = String(process.env.API_KEY || "");
+  if (!key || key.length < 5) throw new Error("AUTHORIZATION_REQUIRED");
+  return new GoogleGenAI({ apiKey: key });
 };
 
-export const publishQuiz = async (quiz: Partial<Quiz>, questions: any[]) => {
-  try {
-    const docRef = await addDoc(collection(db, 'quizzes'), {
-      ...quiz,
-      questions,
-      status: quiz.status || 'pending',
-      createdAt: new Date().toISOString()
-    });
-    return docRef.id;
-  } catch (error) {
-    console.error("Error publishing quiz:", error);
-    throw error;
+function encode(bytes: Uint8Array) {
+  let binary = '';
+  const len = bytes.byteLength;
+  for (let i = 0; i < len; i++) {
+    binary += String.fromCharCode(bytes[i]);
   }
-};
+  return btoa(binary);
+}
 
-export const deleteQuizFromCloud = async (id: string) => {
-  try {
-    await deleteDoc(doc(db, 'quizzes', id));
-  } catch (error) {
-    console.error("Error deleting quiz node:", error);
-    throw error;
+function decode(base64: string) {
+  const binaryString = atob(base64);
+  const len = binaryString.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    bytes[i] = binaryString.charCodeAt(i);
   }
-};
+  return bytes;
+}
 
-export const submitExamResult = async (result: Omit<ExamResult, 'id'>) => {
-  try {
-    // Check if this is the user's first attempt for this quiz
-    const q = query(
-      collection(db, 'exam_results'),
-      where('userId', '==', result.userId),
-      where('quizId', '==', result.quizId),
-      limit(1)
-    );
-    const snap = await getDocs(q);
-    const isFirst = snap.empty;
-
-    const docRef = await addDoc(collection(db, 'exam_results'), {
-      ...result,
-      isFirstAttempt: isFirst
-    });
-    return docRef.id;
-  } catch (error) {
-    console.error("Error submitting exam result:", error);
-    throw error;
+export async function decodeRawPCM(data: Uint8Array, ctx: AudioContext, sampleRate: number): Promise<AudioBuffer> {
+  const dataInt16 = new Int16Array(data.buffer);
+  const frameCount = dataInt16.length;
+  const buffer = ctx.createBuffer(1, frameCount, sampleRate);
+  const channelData = buffer.getChannelData(0);
+  for (let i = 0; i < frameCount; i++) {
+    channelData[i] = dataInt16[i] / 32768.0;
   }
-};
+  return buffer;
+}
 
-/**
- * Gets rankings for a specific quiz, only counting the first attempt of each user.
+/** 
+ * MCQ SYNTHESIS NODE
  */
-export const getQuizRankings = async (quizId: string) => {
-  const q = query(
-    collection(db, 'exam_results'),
-    where('quizId', '==', quizId),
-    where('isFirstAttempt', '==', true)
-  );
-  const snap = await getDocs(q);
-  const results = snap.docs.map(d => ({ id: d.id, ...d.data() } as ExamResult));
-  
-  return results
-    .sort((a, b) => {
-      if (b.score !== a.score) return b.score - a.score;
-      // If scores are tied, the one who submitted earlier wins
-      return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
-    })
-    .map((res, index) => ({ ...res, rank: index + 1 }));
+export const generateMCQs = async (
+  topic: string, 
+  count: number = 10, 
+  program: string = 'Diploma', 
+  council: string = 'General', 
+  subject?: string, 
+  fileData?: { data: string, mimeType: string }, 
+  difficulty: string = 'Medium',
+  unit?: string,
+  language: 'ENG' | 'NEP' = 'ENG'
+) => {
+  const ai = getAIClient();
+  try {
+    const isEng = council === 'NEC';
+    const deptPrompt = isEng 
+      ? `Generate ${count} high-yield ENGINEERING MCQs for Nepal Engineering Council (NEC) level: ${program}. Focus on Mathematics, Physics, and ${subject} principles.`
+      : `Generate ${count} high-yield ACADEMIC MCQs for ${council} ${program}. Topic: ${topic}.`;
+
+    const prompt = language === 'NEP'
+      ? `नेपाल ${council} ${program} level को ${count} वटा उच्चस्तरीय MCQs नेपाली भाषामा बनाऊ। विषय: ${topic}।`
+      : `${deptPrompt} Topic: ${topic}. Difficulty: ${difficulty}.`;
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-flash-preview', 
+      contents: fileData ? {
+        parts: [
+          { inlineData: { data: fileData.data.split(',')[1] || fileData.data, mimeType: fileData.mimeType } },
+          { text: prompt }
+        ]
+      } : prompt,
+      config: { 
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              question: { type: Type.STRING },
+              options: { 
+                type: Type.ARRAY, 
+                items: { type: Type.STRING },
+                minItems: 4,
+                maxItems: 4
+              },
+              correctAnswer: { type: Type.INTEGER, description: "Index of correct option (0-3)" },
+              explanation: { type: Type.STRING }
+            },
+            required: ["question", "options", "correctAnswer", "explanation"]
+          }
+        },
+        safetySettings 
+      }
+    });
+
+    const jsonStr = String(response.text || "").trim();
+    if (!jsonStr) throw new Error("Empty response from AI node.");
+    return JSON.parse(jsonStr);
+  } catch (e) {
+    throw handleAIError(e);
+  }
 };
 
-/**
- * Calculates cumulative rankings for a program based ONLY on "Mock Exam" types.
- * Only the first attempt of each mock exam is factored into the student's mastery score.
+/** 
+ * AI Tutor Response Node
  */
-export const getProgramMasteryRankings = async (council: string, program: string) => {
-  const q = query(
-    collection(db, 'exam_results'),
-    where('council', '==', council),
-    where('program', '==', program),
-    where('quizModuleType', '==', 'Mock Exam'),
-    where('isFirstAttempt', '==', true)
-  );
-  
-  const snap = await getDocs(q);
-  const allResults = snap.docs.map(d => d.data() as ExamResult);
-  
-  const studentStats: Record<string, { totalPct: number; count: number; name: string }> = {};
-  
-  allResults.forEach(r => {
-    if (!studentStats[r.userId]) {
-      studentStats[r.userId] = { totalPct: 0, count: 0, name: r.userName };
+export const getTutorResponse = async (
+  query: string, 
+  history: { role: 'user' | 'model', content: string }[] = [],
+  context?: { program: string, council: string }
+) => {
+  const ai = getAIClient();
+  try {
+    const isEng = context?.council === 'NEC';
+    const systemInstruction = isEng 
+      ? `You are an expert Engineering Tutor for Nepal Engineering Council (NEC) exams. 
+         Provide technical engineering data, solve complex mathematical problems step-by-step, 
+         and reference standard engineering codes. Your tone is logical, precise, and practical.`
+      : `You are a specialized academic tutor for Nepalese Educational Councils (NPC, NMC, NNC, NHPC). 
+         Provide technical academic data. Support English and Nepali.`;
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-flash-preview',
+      contents: [
+        ...history.map(m => ({ role: m.role, parts: [{ text: String(m.content) }] })),
+        { role: 'user', parts: [{ text: String(query) }] }
+      ],
+      config: { 
+        systemInstruction,
+        safetySettings 
+      }
+    });
+    return { text: String(response.text || ""), node: isEng ? 'nec-engineering-flash' : 'gemini-3-flash' };
+  } catch (e) {
+    throw handleAIError(e);
+  }
+};
+
+export const analyzeAcademicImage = async (base64Image: string, mimeType: string, query: string) => {
+  const ai = getAIClient();
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash-image',
+      contents: { 
+        parts: [
+          { inlineData: { data: base64Image.split(',')[1] || base64Image, mimeType } }, 
+          { text: `Academic Analysis Request: ${String(query)}` }
+        ] 
+      },
+      config: { safetySettings }
+    });
+    return String(response.text || "");
+  } catch (e) {
+    throw handleAIError(e);
+  }
+};
+
+export const generateAudioBriefing = async (text: string) => {
+  const ai = getAIClient();
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash-preview-tts",
+      contents: [{ parts: [{ text: `Academic briefing: ${String(text)}.` }] }],
+      config: {
+        responseModalities: [Modality.AUDIO],
+        speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } } },
+        safetySettings
+      }
+    });
+    return String(response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data || "");
+  } catch (e) { throw handleAIError(e); }
+};
+
+export const generateAcademicVideo = async (prompt: string, onProgress: (msg: string) => void) => {
+  const ai = getAIClient();
+  try {
+    onProgress("Initializing Node...");
+    let operation = await ai.models.generateVideos({ 
+      model: 'veo-3.1-fast-generate-preview', 
+      prompt: `Educational visualization: ${String(prompt)}`, 
+      config: { numberOfVideos: 1, resolution: '720p', aspectRatio: '16:9' } 
+    });
+    
+    const key = String(process.env.API_KEY || "");
+
+    while (!operation.done) {
+      onProgress("Synthesizing...");
+      await new Promise(resolve => setTimeout(resolve, 8000));
+      // Fix: Use operation.name to avoid passing circular internal objects back to the SDK
+      operation = await ai.operations.getVideosOperation({ operation });
     }
-    studentStats[r.userId].totalPct += r.percentage;
-    studentStats[r.userId].count += 1;
+    const videoUri = operation.response?.generatedVideos?.[0]?.video?.uri;
+    if (!videoUri) throw new Error("Synthesis Node failed.");
+    const fetchResponse = await fetch(`${videoUri}&key=${key}`);
+    const blob = await fetchResponse.blob();
+    return URL.createObjectURL(blob);
+  } catch (e) { throw handleAIError(e); }
+};
+
+export const fetchLiveCouncilNews = async () => {
+  const ai = getAIClient();
+  try {
+    const response = await ai.models.generateContent({ 
+      model: 'gemini-3-flash-preview', 
+      contents: `Recent council notices Nepal (NMC, NPC, NNC, NHPC, NEC Engineering).`, 
+      config: { tools: [{ googleSearch: {} }], safetySettings } 
+    });
+    const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+    const citations = chunks.map((c: any) => ({ 
+      title: String(c.web?.title || "Source"), 
+      uri: String(c.web?.uri || "") 
+    })).filter((c: any) => c.uri);
+    return [{ title: "Latest Council Sync", content: String(response.text || ""), date: new Date().toLocaleDateString(), citations }];
+  } catch (e) { throw handleAIError(e); }
+};
+
+export const generateTechnicalDerivation = async (query: string) => {
+  const ai = getAIClient();
+  const response = await ai.models.generateContent({
+    model: 'gemini-3-flash-preview',
+    contents: `Provide technical derivation or analysis for: ${String(query)}. Return JSON array: [{diagnosis: "Derivation Node", reasoning, nepaleseContext}]`,
+    config: { responseMimeType: "application/json" }
   });
-  
-  const rankedStudents = Object.entries(studentStats).map(([userId, stats]) => ({
-    userId,
-    userName: stats.name,
-    averageMastery: stats.totalPct / stats.count,
-    attempts: stats.count
-  }));
-  
-  return rankedStudents
-    .sort((a, b) => b.averageMastery - a.averageMastery)
-    .map((s, idx) => ({ ...s, rank: idx + 1 }));
+  const text = String(response.text || "[]").trim();
+  return JSON.parse(text);
 };
 
-export const subscribeToPendingQuizzes = (callback: (quizzes: Quiz[]) => void, onError?: (error: any) => void) => {
-  const q = query(collection(db, 'quizzes'), where('status', '==', 'pending'));
-  return onSnapshot(q, 
-    (snapshot) => {
-      callback(snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Quiz)));
+export const startLiveVivaSession = async (config: any, callbacks: any) => {
+  const ai = getAIClient();
+  const inputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
+  const outputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+  let nextStartTime = 0;
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  const sessionPromise = ai.live.connect({
+    model: 'gemini-2.5-flash-native-audio-preview-12-2025',
+    callbacks: {
+      onopen: () => {
+        const source = inputAudioContext.createMediaStreamSource(stream);
+        const scriptProcessor = inputAudioContext.createScriptProcessor(4096, 1, 1);
+        scriptProcessor.onaudioprocess = (e) => {
+          const inputData = e.inputBuffer.getChannelData(0);
+          const int16 = new Int16Array(inputData.length);
+          for (let i = 0; i < inputData.length; i++) int16[i] = inputData[i] * 32768;
+          sessionPromise.then(s => s.sendRealtimeInput({ audio: { data: encode(new Uint8Array(int16.buffer)), mimeType: 'audio/pcm;rate=16000' } }));
+        };
+        source.connect(scriptProcessor);
+        scriptProcessor.connect(inputAudioContext.destination);
+      },
+      onmessage: async (message: LiveServerMessage) => {
+        const base64Audio = message.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
+        if (base64Audio) {
+          nextStartTime = Math.max(nextStartTime, outputAudioContext.currentTime);
+          const bytes = decode(String(base64Audio));
+          const audioBuffer = await decodeRawPCM(bytes, outputAudioContext, 24000);
+          const source = outputAudioContext.createBufferSource();
+          source.buffer = audioBuffer;
+          source.connect(outputAudioContext.destination);
+          source.start(nextStartTime);
+          nextStartTime += audioBuffer.duration;
+        }
+      },
+      onerror: (e) => callbacks.onError(String(e || "Audio node fault")),
+      onclose: () => callbacks.onClose(),
     },
-    (error) => {
-      console.error("Quizzes subscription error:", error);
-      if (onError) onError(error);
-    }
-  );
+    config: { responseModalities: [Modality.AUDIO], systemInstruction: "Technical Viva Node for Nepalese Academic and Engineering Professionals." }
+  });
+  return { stop: () => { sessionPromise.then(s => s.close()); stream.getTracks().forEach(t => t.stop()); inputAudioContext.close(); outputAudioContext.close(); } };
 };
 
-export const subscribeToApprovedQuizzes = (callback: (quizzes: Quiz[]) => void, onError?: (error: any) => void) => {
-  const q = query(collection(db, 'quizzes'), where('status', '==', 'approved'));
-  return onSnapshot(q, 
-    (snapshot) => {
-      callback(snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Quiz)));
-    },
-    (error) => {
-      console.error("Approved Quizzes subscription error:", error);
-      if (onError) onError(error);
-    }
-  );
+export const checkTechnicalInteraction = async (componentA: string, componentB: string) => {
+  const ai = getAIClient();
+  const response = await ai.models.generateContent({
+    model: 'gemini-3-flash-preview',
+    contents: `Analyze technical interaction or conflict between ${String(componentA)} and ${String(componentB)}. Return JSON: {severity, mechanism, recommendations: [], isConflict: boolean}`,
+    config: { responseMimeType: "application/json" }
+  });
+  const text = String(response.text || "{}").trim();
+  return JSON.parse(text);
 };
 
-export const subscribeToPendingMaterials = (callback: (materials: LearningMaterial[]) => void, onError?: (error: any) => void) => {
-  const q = query(collection(db, 'materials'), where('status', '==', 'pending'));
-  return onSnapshot(q, 
-    (snapshot) => {
-      callback(snapshot.docs.map(d => ({ id: d.id, ...d.data() } as LearningMaterial)));
-    },
-    (error) => {
-      console.error("Materials subscription error:", error);
-      if (onError) onError(error);
-    }
-  );
+export const generateSolutionMatrix = async (problem: string) => {
+  const ai = getAIClient();
+  const response = await ai.models.generateContent({
+    model: 'gemini-3-flash-preview',
+    contents: `Provide top academic/technical solutions for: ${String(problem)}. Return JSON array: [{solution, probability, reasoning, nepaleseContext}]`,
+    config: { responseMimeType: "application/json" }
+  });
+  const text = String(response.text || "[]").trim();
+  return JSON.parse(text);
 };
 
-export const updateQuizStatusInCloud = async (id: string, status: 'approved' | 'rejected') => {
-  await updateDoc(doc(db, 'quizzes', id), { status });
+export const generateStudyPlan = async (objective: string) => {
+  const ai = getAIClient();
+  const response = await ai.models.generateContent({
+    model: 'gemini-3-flash-preview',
+    contents: `Generate a comprehensive study plan for: ${String(objective)}. Return JSON: {assessment, academicObjective, interventions: [], expectedOutcome}`,
+    config: { responseMimeType: "application/json" }
+  });
+  const text = String(response.text || "{}").trim();
+  return JSON.parse(text);
 };
 
-export const updateMaterialStatusInCloud = async (id: string, status: 'approved' | 'rejected') => {
-  await updateDoc(doc(db, 'materials', id), { status });
-};
-
-export const getInstructorContent = async (instructorId: string) => {
-  const materialsQuery = query(collection(db, 'materials'), where('uploadedBy', '==', instructorId));
-  const quizzesQuery = query(collection(db, 'quizzes'), where('uploadedBy', '==', instructorId));
-  
-  const [matSnap, quizSnap] = await Promise.all([getDocs(materialsQuery), getDocs(quizzesQuery)]);
-  
-  return {
-    materials: matSnap.docs.map(doc => ({ id: doc.id, ...doc.data() } as LearningMaterial)),
-    quizzes: quizSnap.docs.map(doc => ({ id: doc.id, ...doc.data() } as Quiz))
-  };
-};
-
-export const getCurriculum = async () => {
-  const snap = await getDoc(doc(db, 'system', 'curriculum'));
-  return snap.exists() ? snap.data().data : null;
-};
-
-export const saveCurriculum = async (data: any) => {
-  await setDoc(doc(db, 'system', 'curriculum'), { data });
+export const generateAcademicScenario = async (program: string, council: string) => {
+  const ai = getAIClient();
+  const response = await ai.models.generateContent({
+    model: 'gemini-3-flash-preview',
+    contents: `Generate a technical academic scenario for a ${String(program)} student under ${String(council)} council. Return JSON: {studentName, academicHistory, tasks: [{id, component, requirement, isErroneous, errorDetail}]}`,
+    config: { responseMimeType: "application/json" }
+  });
+  const text = String(response.text || "{}").trim();
+  return JSON.parse(text);
 };

@@ -1,71 +1,157 @@
 
-import React from 'react';
+import { db } from './firebase';
+import { doc, getDoc } from 'firebase/firestore';
 
-const Calendar: React.FC = () => {
-  const days = Array.from({ length: 31 }, (_, i) => i + 1);
-  const events = [
-    { day: 14, title: 'NPC Form Deadline', type: 'red' },
-    { day: 22, title: 'Mock Exam #2', type: 'blue' },
-    { day: 28, title: 'Revision Session', type: 'green' },
-  ];
-
-  return (
-    <div className="space-y-8">
-      <div className="flex justify-between items-center">
-         <h1 className="text-3xl font-bold">Study Planner</h1>
-         <div className="flex gap-2">
-            <button className="bg-slate-900 px-4 py-2 rounded-xl text-sm font-bold border border-slate-800">&lt; May 2024 &gt;</button>
-         </div>
-      </div>
-
-      <div className="bg-slate-900 border border-slate-800 p-8 rounded-[48px] shadow-2xl">
-        <div className="grid grid-cols-7 gap-4 mb-6">
-          {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => (
-            <div key={d} className="text-center text-slate-500 text-xs font-black uppercase">{d}</div>
-          ))}
-        </div>
-        <div className="grid grid-cols-7 gap-2">
-          {/* Mock empty days for start of month */}
-          {Array.from({ length: 3 }).map((_, i) => (
-            <div key={`empty-${i}`} className="aspect-square"></div>
-          ))}
-          {days.map(d => {
-            const event = events.find(e => e.day === d);
-            return (
-              <div key={d} className={`aspect-square rounded-2xl border flex flex-col items-center justify-center relative transition-all cursor-pointer ${
-                event ? 'bg-slate-800 border-slate-700' : 'border-transparent hover:bg-slate-800/50'
-              }`}>
-                <span className={`text-sm font-bold ${event ? 'text-white' : 'text-slate-500'}`}>{d}</span>
-                {event && (
-                  <div className={`w-1.5 h-1.5 rounded-full absolute bottom-2 ${
-                    event.type === 'red' ? 'bg-red-500' : event.type === 'blue' ? 'bg-blue-500' : 'bg-green-500'
-                  }`}></div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      <div className="space-y-4">
-        <h3 className="font-bold text-lg">Upcoming Events</h3>
-        {events.map((e, i) => (
-          <div key={i} className="flex items-center gap-4 bg-slate-900 p-5 rounded-3xl border border-slate-800">
-             <div className={`w-12 h-12 rounded-2xl flex items-center justify-center text-xl ${
-               e.type === 'red' ? 'bg-red-500/10' : e.type === 'blue' ? 'bg-blue-500/10' : 'bg-green-500/10'
-             }`}>
-               {e.type === 'red' ? '📅' : e.type === 'blue' ? '📝' : '📖'}
-             </div>
-             <div className="flex-1">
-               <p className="font-bold">{e.title}</p>
-               <p className="text-xs text-slate-500">May {e.day}, 2024</p>
-             </div>
-             <button className="text-blue-500 text-xs font-bold uppercase">Details</button>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
+/**
+ * Ensures an external link has a valid protocol (https://) to prevent DNS/NXDOMAIN faults.
+ */
+export const ensureExternalLink = (url: string | undefined | null): string => {
+  if (!url) return '';
+  let clean = url.trim();
+  if (!/^https?:\/\//i.test(clean)) {
+    return `https://${clean}`;
+  }
+  return clean;
 };
 
-export default Calendar;
+/**
+ * Robust URL repair utility to fix malformed CDN assets.
+ * CRITICAL: Transform Storage API URLs to Pull Zone URLs to avoid 403 Forbidden errors in iframes.
+ */
+export const sanitizeUrl = (url: string | undefined | null): string => {
+  if (!url) return '';
+  let repaired = url.trim();
+  
+  if (repaired.startsWith('data:')) return repaired;
+  
+  // Remove duplicate protocols
+  repaired = repaired.replace(/^(https?:\/\/)+/g, 'https://');
+  
+  if (repaired.startsWith('//')) repaired = `https:${repaired}`;
+
+  // Step 1: Handle Bunny Storage API endpoints (sg.storage.bunnycdn.com or storage.bunnycdn.com)
+  if (repaired.includes('storage.bunnycdn.com')) {
+    try {
+      const urlObj = new URL(repaired);
+      const pathParts = urlObj.pathname.split('/').filter(Boolean);
+      
+      if (pathParts[0] === 'councilsolutionnepal') {
+        pathParts.shift();
+      }
+      
+      const cleanPath = pathParts.join('/');
+      return `https://councilsolutionnepal.b-cdn.net/${cleanPath}`;
+    } catch (e) {
+      console.warn("URL Parse Failure in Sanitize Node");
+    }
+  }
+  
+  // Step 2: Handle relative paths or old domains
+  if (!repaired.startsWith('http')) {
+    const cleanPath = repaired.replace(/^\/|councilsolutionnepal\//g, '');
+    return `https://councilsolutionnepal.b-cdn.net/${cleanPath}`;
+  }
+
+  if (repaired.includes('councilnode.np')) {
+    repaired = repaired.replace(/councilnode\.np/g, 'councilsolutionnepal.b-cdn.net');
+  }
+
+  // Ensure Bunny CDN pathing is clean (no double zone name)
+  if (repaired.includes('.b-cdn.net/councilsolutionnepal/')) {
+    repaired = repaired.replace('.b-cdn.net/councilsolutionnepal/', '.b-cdn.net/');
+  }
+
+  return repaired;
+};
+
+export const getThumbnailUrl = (url: string | undefined | null, width: number = 400): string => {
+  const base = sanitizeUrl(url);
+  if (!base || base.startsWith('data:')) return base;
+  return `${base}?width=${width}&quality=80&format=webp`;
+};
+
+export const getStorageConfig = async () => {
+  try {
+    const snap = await getDoc(doc(db, 'system', 'config'));
+    if (snap.exists()) {
+      const data = snap.data();
+      const region = data.bunnyRegion || 'Singapore';
+      return {
+        hostname: region === 'Singapore' ? 'sg.storage.bunnycdn.com' : 'storage.bunnycdn.com',
+        zoneName: data.bunnyZoneName || 'councilsolutionnepal',
+        accessKey: data.bunnyPassword || 'ab8d08fa-a3cf-41f5-b46c26f788e3-407c-47a4',
+        pullZone: sanitizeUrl(data.bunnyPullZoneUrl || 'councilsolutionnepal.b-cdn.net').replace(/\/$/, '')
+      };
+    }
+  } catch (e) {
+    console.error("Storage config unreachable, using defaults.");
+  }
+  
+  return {
+    hostname: 'sg.storage.bunnycdn.com',
+    zoneName: 'councilsolutionnepal',
+    accessKey: 'ab8d08fa-a3cf-41f5-b46c26f788e3-407c-47a4',
+    pullZone: 'https://councilsolutionnepal.b-cdn.net'
+  };
+};
+
+export const verifyBunnyConnection = async (configOverride?: any): Promise<{ success: boolean; message: string }> => {
+  try {
+    const config = configOverride || await getStorageConfig();
+    const url = `https://${config.hostname}/${config.zoneName}/`;
+
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: { 'AccessKey': config.accessKey },
+    });
+
+    if (response.status === 200) return { success: true, message: 'Node Pulse Active.' };
+    if (response.status === 401) return { success: false, message: 'Authentication Failed (401).' };
+    return { success: false, message: `Node Error: ${response.status}` };
+  } catch (e) {
+    return { success: false, message: 'Network Timeout: Node unreachable.' };
+  }
+};
+
+export const uploadToBunny = (
+  file: File, 
+  path: string = 'library', 
+  onProgress?: (percent: number) => void
+): Promise<string> => {
+  return new Promise(async (resolve, reject) => {
+    try {
+      const config = await getStorageConfig();
+      const sanitizedFileName = file.name.replace(/[^a-z0-9.]/gi, '_').toLowerCase();
+      const fileName = `${Date.now()}-${sanitizedFileName}`;
+      const cleanPath = path.replace(/^\/|\/$/g, '');
+      const uploadUrl = `https://${config.hostname}/${config.zoneName}/${cleanPath}/${fileName}`;
+
+      const xhr = new XMLHttpRequest();
+      xhr.open('PUT', uploadUrl, true);
+      xhr.setRequestHeader('AccessKey', config.accessKey);
+      xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+
+      if (onProgress) {
+        xhr.upload.onprogress = (event) => {
+          if (event.lengthComputable) {
+            onProgress(Math.round((event.loaded / event.total) * 100));
+          }
+        };
+      }
+
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve(sanitizeUrl(`${config.pullZone}/${cleanPath}/${fileName}`));
+        } else {
+          const msg = xhr.status === 401 ? 'Invalid Access Key' : `Server Status ${xhr.status}`;
+          reject(new Error(`CDN Node Rejected: ${msg}`));
+        }
+      };
+
+      xhr.onerror = () => reject(new Error('Network Failure: Check connectivity or CORS permissions in Bunny Dashboard.'));
+      xhr.send(file);
+    } catch (e: any) {
+      reject(new Error(`Logic Error: ${e.message}`));
+    }
+  });
+};

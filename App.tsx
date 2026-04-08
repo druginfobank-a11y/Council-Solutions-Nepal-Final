@@ -1,358 +1,304 @@
-import React, { useState, useRef, useEffect } from 'react';
-import GovernmentDisclaimer from '../components/GovernmentDisclaimer';
-import { getTutorResponse } from '../services/geminiService';
-import { UserRole, User } from '../types';
-import { auth, db } from '../services/firebase';
-import { doc, getDoc, updateDoc } from 'firebase/firestore';
 
-interface Message {
-  role: 'user' | 'model' | 'error';
-  content: string;
-  node?: string;
-  errorType?: 'auth' | 'generic';
+import React, { useState, useEffect, ReactNode, Component } from 'react';
+import * as ReactRouter from 'react-router-dom';
+import Layout from './components/Layout';
+import Dashboard from './views/Dashboard';
+import Tutor from './views/Tutor';
+import Library from './views/Library';
+import QuizHub from './views/QuizHub';
+import PracticalLab from './views/PracticalLab';
+import News from './views/News';
+import Profile from './views/Profile';
+import Settings from './views/Settings';
+import AdminPortal from './views/AdminPortal';
+import Instructor from './views/Instructor';
+import Auth from './views/Auth';
+import Plans from './views/Plans';
+import { User, UserRole, SystemSettings } from './types';
+import { auth, db } from './services/firebase';
+import { onAuthStateChanged, signOut } from 'firebase/auth';
+import { doc, getDoc, onSnapshot, updateDoc } from 'firebase/firestore';
+
+const { HashRouter, Routes, Route, Navigate, Link } = ReactRouter as any;
+const Router = HashRouter;
+
+interface ErrorBoundaryProps { children?: ReactNode; }
+interface ErrorBoundaryState { hasError: boolean; }
+
+class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  public state: ErrorBoundaryState = { hasError: false };
+  static getDerivedStateFromError(_: any): ErrorBoundaryState { return { hasError: true }; }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="h-screen flex items-center justify-center bg-slate-950 text-white p-8 text-center">
+          <div className="space-y-6">
+            <h1 className="text-4xl font-bold uppercase tracking-tighter italic">System Node Fault 🚨</h1>
+            <p className="text-slate-400 max-w-xs mx-auto uppercase tracking-widest text-[10px] leading-relaxed">A circular dependency or orchestration fault was detected in the neural network.</p>
+            <button onClick={() => window.location.reload()} className="bg-blue-600 px-8 py-3 rounded-2xl font-black uppercase tracking-widest text-xs shadow-xl active:scale-95">Restart Protocol</button>
+          </div>
+        </div>
+      );
+    }
+    return (this as any).props.children || null;
+  }
 }
 
-const WaveformVisualizer: React.FC = () => (
-  <div className="flex items-center gap-1 h-5 md:h-8 px-1 md:px-4">
-    {Array.from({ length: 12 }).map((_, i) => (
-      <div 
-        key={i} 
-        className="w-0.5 md:w-1 bg-red-500 rounded-full animate-[viva-pulse_1s_ease-in-out_infinite]" 
-        style={{ height: `${20 + Math.random() * 80}%`, animationDelay: `${i * 0.08}s` }}
-      ></div>
-    ))}
+const InstructorPendingScreen: React.FC<{ onLogout: () => void }> = ({ onLogout }) => (
+  <div className="h-screen bg-slate-950 flex flex-col items-center justify-center p-6 text-center relative overflow-hidden">
+    <div className="absolute inset-0 bg-purple-600/5 blur-[120px] rounded-full animate-pulse"></div>
+    <div className="max-w-md w-full space-y-10 animate-in relative z-10">
+      <div className="w-24 h-24 bg-purple-600/10 rounded-[40px] flex items-center justify-center text-purple-500 text-5xl shadow-[0_0_50px_rgba(168,85,247,0.2)] mx-auto border border-purple-500/20">⏳</div>
+      <div className="space-y-3">
+        <h1 className="text-3xl md:text-4xl font-black text-white uppercase tracking-tighter leading-none italic">ID Verification Pending</h1>
+        <p className="text-purple-500 text-[10px] font-black uppercase tracking-[0.4em]">Protocol: Faculty Accreditation Review</p>
+      </div>
+      <div className="bg-white/5 border border-white/5 p-8 rounded-[40px] backdrop-blur-xl text-center">
+        <p className="text-slate-400 text-sm font-medium leading-relaxed mb-6">
+          Your instructor credentials have been received. To maintain institutional standards, an administrator must verify your profile before you can architect logic nodes.
+        </p>
+        <div className="inline-flex items-center gap-2 px-4 py-2 bg-purple-500/10 rounded-full border border-purple-500/20">
+          <span className="w-2 h-2 rounded-full bg-purple-500 animate-pulse"></span>
+          <span className="text-[8px] font-black text-purple-400 uppercase tracking-widest">Awaiting Verification Sync</span>
+        </div>
+      </div>
+      <button onClick={onLogout} className="text-slate-500 text-[9px] font-black uppercase tracking-[0.3em] hover:text-white transition-colors">Terminate Auth Session</button>
+    </div>
   </div>
 );
 
-const AcademicContent: React.FC<{ text: string, node?: string }> = ({ text, node }) => {
-  const lines = text.split('\n');
-  const elements: React.ReactNode[] = [];
-  
-  let currentTable: string[][] = [];
-  let inTable = false;
-
-  const parseInlineStyles = (line: string) => {
-    const parts = line.split(/(\*\*.*?\*\*|\*.*?\*)/g);
-    return parts.map((part, i) => {
-      if (part.startsWith('**') && part.endsWith('**')) {
-        return <strong key={i} className="font-black text-white">{part.slice(2, -2)}</strong>;
-      }
-      if (part.startsWith('*') && part.endsWith('*')) {
-        return <em key={i} className="italic text-blue-400/90">{part.slice(1, -1)}</em>;
-      }
-      return part;
-    });
-  };
-
-  const renderTable = (rows: string[][], key: number) => {
-    if (rows.length < 2) return null;
-    const filteredRows = rows.filter(row => !row.every(cell => cell.trim().match(/^-+$/)));
-    if (filteredRows.length === 0) return null;
-
-    const headers = filteredRows[0];
-    const body = filteredRows.slice(1);
-
-    return (
-      <div key={`table-${key}`} className="my-4 md:my-6 overflow-x-auto rounded-xl md:rounded-2xl border border-blue-500/20 bg-slate-950/50 shadow-2xl scrollbar-hide">
-        <table className="min-w-full divide-y divide-blue-500/10 text-left border-collapse">
-          <thead className="bg-blue-600/5">
-            <tr>
-              {headers.map((h, i) => (
-                <th key={i} className="px-3 md:px-6 py-3 md:py-4 text-[9px] md:text-xs font-black text-blue-400 uppercase tracking-widest whitespace-nowrap">{h.trim()}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-white/5">
-            {body.map((row, ri) => (
-              <tr key={ri} className="hover:bg-white/[0.02] transition-colors group">
-                {row.map((cell, ci) => (
-                  <td key={ci} className="px-3 md:px-6 py-3 md:py-4 text-[10px] md:text-sm text-slate-300 font-medium leading-relaxed">{parseInlineStyles(cell.trim())}</td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
+const SessionConflictScreen: React.FC<{ onReauthorize: () => void }> = ({ onReauthorize }) => (
+  <div className="h-screen bg-slate-950 flex flex-col items-center justify-center p-6 text-center relative overflow-hidden">
+    <div className="absolute inset-0 bg-orange-600/5 blur-[120px] rounded-full animate-pulse"></div>
+    <div className="max-w-md w-full space-y-10 animate-in relative z-10">
+      <div className="w-24 h-24 bg-orange-600/10 rounded-[40px] flex items-center justify-center text-orange-500 text-5xl shadow-[0_0_50px_rgba(249,115,22,0.2)] mx-auto border border-orange-500/20">📱</div>
+      <div className="space-y-3">
+        <h1 className="text-3xl md:text-4xl font-black text-white uppercase tracking-tighter leading-none italic">Security Protocol Breach</h1>
+        <p className="text-orange-500 text-[10px] font-black uppercase tracking-[0.4em]">Node Active in Another Device</p>
       </div>
-    );
-  };
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (line.includes('|')) {
-      const cells = line.split('|').filter((_, idx, arr) => {
-        if (idx === 0 && line.startsWith('|')) return false;
-        if (idx === arr.length - 1 && line.endsWith('|')) return false;
-        return true;
-      });
-      if (cells.length > 0) {
-        currentTable.push(cells);
-        inTable = true;
-        continue;
-      }
-    }
-    if (inTable && (!line.includes('|') || i === lines.length - 1)) {
-      elements.push(renderTable(currentTable, i));
-      currentTable = [];
-      inTable = false;
-      if (!line.includes('|') && line === '') continue;
-    }
-    if (!inTable) {
-      if (!line) {
-        elements.push(<div key={i} className="h-1 md:h-2" />);
-        continue;
-      }
-      if (line.startsWith('###')) {
-        elements.push(
-          <div key={i} className="mt-6 md:mt-12 mb-3 md:mb-8 flex items-center gap-3 md:gap-6">
-            <h3 className="text-blue-500 text-[10px] md:text-xl font-black uppercase tracking-[0.12em] md:tracking-[0.2em] leading-none shrink-0 italic">{parseInlineStyles(line.replace(/^###\s*/, ''))}</h3>
-            <div className="h-px flex-1 bg-gradient-to-r from-blue-600/30 to-transparent"></div>
-          </div>
-        );
-      } else {
-        elements.push(<p key={i} className="text-slate-300 text-xs md:text-base leading-[1.6] md:leading-[1.8] font-medium tracking-tight">{parseInlineStyles(line)}</p>);
-      }
-    }
-  }
-
-  return (
-    <div className="space-y-3 md:space-y-6">
-      <div className="prose prose-invert max-w-none space-y-3 md:space-y-4">{elements}</div>
-      {node && (
-        <div className="pt-3 md:pt-4 border-t border-white/5 flex items-center gap-2">
-          <span className="w-1 md:w-1.5 h-1 md:h-1.5 rounded-full bg-green-500"></span>
-          <p className="text-[6px] md:text-[7px] font-black text-slate-500 uppercase tracking-widest">Academic Node: {node.toUpperCase()}</p>
-        </div>
-      )}
+      <div className="bg-white/5 border border-white/5 p-8 rounded-[40px] backdrop-blur-xl">
+        <p className="text-slate-400 text-sm font-medium leading-relaxed mb-8">
+          Security policy allows only one active academic terminal per account. Your session has been synchronized to a different device. 
+          <br/><br/>
+          To continue on this terminal, you must terminate other active node sessions.
+        </p>
+        <button onClick={onReauthorize} className="w-full bg-blue-600 text-white py-5 rounded-3xl font-black text-[11px] uppercase tracking-[0.2em] shadow-2xl hover:scale-105 active:scale-95 transition-all">Terminate Other Sessions</button>
+      </div>
+      <button onClick={() => signOut(auth)} className="text-slate-500 text-[9px] font-black uppercase tracking-[0.3em] hover:text-white transition-colors">Logout This Device</button>
     </div>
-  );
-};
+  </div>
+);
 
-const Tutor: React.FC = () => {
-  const [currentUserData, setCurrentUserData] = useState<User | null>(null);
-  const [isDataLoaded, setIsDataLoaded] = useState(false);
-  const [isRequesting, setIsRequesting] = useState(false);
-  const [messages, setMessages] = useState<Message[]>(() => {
-    try {
-      const saved = localStorage.getItem('csn_tutor_chat');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) {
-          return parsed.map(m => ({
-            role: m.role || 'model',
-            content: String(m.content || ''),
-            node: m.node ? String(m.node) : undefined,
-            errorType: m.errorType
-          }));
-        }
-      }
-    } catch (e) {
-      console.warn("Storage node sync failure.");
+const ExpiredAccessScreen: React.FC<{ onLogout: () => void }> = ({ onLogout }) => (
+  <div className="h-screen bg-slate-950 flex flex-col items-center justify-center p-6 text-center relative overflow-hidden">
+    <div className="absolute inset-0 bg-red-600/5 blur-[120px] rounded-full animate-pulse"></div>
+    <div className="max-w-md w-full space-y-10 animate-in relative z-10">
+      <div className="w-24 h-24 bg-red-600/10 rounded-[40px] flex items-center justify-center text-red-500 text-5xl shadow-[0_0_50px_rgba(220,38,38,0.2)] mx-auto border border-red-500/20">🔒</div>
+      <div className="space-y-3">
+        <h1 className="text-3xl md:text-4xl font-black text-white uppercase tracking-tighter leading-none italic">Node Access Revoked</h1>
+        <p className="text-red-500 text-[10px] font-black uppercase tracking-[0.4em]">Protocol: Trial Expired / License Required</p>
+      </div>
+      <div className="bg-white/5 border border-white/5 p-8 rounded-[40px] backdrop-blur-xl">
+        <p className="text-slate-400 text-sm font-medium leading-relaxed mb-8">
+          Your initial 48-hour academic trial period has concluded. High-yield logic nodes and AI tutoring now require an active subscription node.
+        </p>
+        <Link to="/plans" className="block w-full bg-blue-600 text-white py-5 rounded-3xl font-black text-[11px] uppercase tracking-[0.2em] shadow-2xl hover:scale-105 active:scale-95 transition-all">Synchronize License</Link>
+      </div>
+      <button onClick={onLogout} className="text-slate-500 text-[9px] font-black uppercase tracking-[0.3em] hover:text-white transition-colors">Terminate Session</button>
+    </div>
+  </div>
+);
+
+const KeySelectionScreen: React.FC<{ onAuthorize: () => void }> = ({ onAuthorize }) => (
+  <div className="h-screen bg-slate-950 flex flex-col items-center justify-center p-6 text-center relative overflow-hidden">
+    <div className="absolute inset-0 bg-blue-600/5 blur-[120px] rounded-full animate-pulse"></div>
+    <div className="max-w-md w-full space-y-10 animate-in relative z-10">
+      <div className="w-20 h-20 bg-blue-600 rounded-[32px] flex items-center justify-center text-white text-4xl shadow-[0_0_50px_rgba(37,99,235,0.3)] mx-auto border border-white/10">🔌</div>
+      <div className="space-y-3">
+        <h1 className="text-3xl font-black text-white uppercase tracking-tighter leading-none">Node Authorization Required</h1>
+        <p className="text-blue-500 text-[10px] font-black uppercase tracking-[0.4em]">Protocol: Verify Intelligence Key</p>
+      </div>
+      <div className="bg-white/5 border border-white/10 p-8 rounded-[40px] backdrop-blur-xl">
+        <p className="text-slate-400 text-sm font-medium leading-relaxed mb-6 italic">"The intelligence satellite network requires a valid API key to synchronize real-time academic data and AI tutoring."</p>
+        <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noopener noreferrer" className="text-[9px] font-black text-blue-400 uppercase tracking-widest hover:underline block">Check Billing Compliance</a>
+      </div>
+      <button onClick={onAuthorize} className="w-full bg-blue-600 text-white py-5 rounded-3xl font-black text-[11px] uppercase tracking-[0.2em] shadow-2xl shadow-blue-600/20 hover:scale-105 active:scale-95 transition-all">Authorize Node Link</button>
+    </div>
+  </div>
+);
+
+const App: React.FC = () => {
+  const [user, setUser] = useState<User | null>(null);
+  const [sysConfig, setSysConfig] = useState<Partial<SystemSettings> | null>(null);
+  const [initializing, setInitializing] = useState(true);
+  const [needsKey, setNeedsKey] = useState(false);
+  const [sessionConflict, setSessionConflict] = useState(false);
+
+  // ROBUST SANITIZATION: Prevents circular errors by strictly allowing only serializable plain objects/arrays/primitives
+  const sanitizeFirestoreData = (data: any): any => {
+    if (data === null || typeof data !== 'object') return data;
+    
+    // Convert Firestore Timestamps to ISO strings
+    if (data.seconds !== undefined && data.nanoseconds !== undefined) {
+      return new Date(data.seconds * 1000).toISOString();
     }
-    return [{ role: 'model', content: "### Intelligence Hub Initialized\nWelcome to the CSN Tutor Node. How can I assist your professional preparation today?", node: 'system' }];
-  });
-  
-  const [input, setInput] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [vivaSession, setVivaSession] = useState<{stop: () => void} | null>(null);
-  const scrollRef = useRef<HTMLDivElement>(null);
+
+    if (Array.isArray(data)) return data.map(sanitizeFirestoreData);
+
+    // Filter for Plain Objects only. Strips out minified internal Firebase classes (circular references)
+    const isPlainObject = Object.prototype.toString.call(data) === '[object Object]' && 
+                          (data.constructor === Object || data.constructor === undefined);
+
+    if (!isPlainObject) return '[Filtered Reference]';
+
+    const sanitized: any = {};
+    for (const key in data) {
+      if (Object.prototype.hasOwnProperty.call(data, key)) {
+        sanitized[key] = sanitizeFirestoreData(data[key]);
+      }
+    }
+    return sanitized;
+  };
 
   useEffect(() => {
-    const fetchUser = async () => {
-      if (auth.currentUser) {
-        const snap = await getDoc(doc(db, 'users', auth.currentUser.uid));
-        if (snap.exists()) {
-          setCurrentUserData(snap.data() as User);
-        }
+    const checkKeySelection = async () => {
+      const apiKey = String(process.env.API_KEY || "");
+      const aistudio = (window as any).aistudio;
+      const isKeyMissing = !apiKey || apiKey.length < 5;
+      if (isKeyMissing && aistudio) {
+        const hasKey = await aistudio.hasSelectedApiKey();
+        if (!hasKey) setNeedsKey(true);
+      } else if (isKeyMissing && !aistudio) {
+        setNeedsKey(true);
       }
-      setIsDataLoaded(true);
     };
-    fetchUser();
+
+    const fetchConfig = async () => {
+      try {
+        const snap = await getDoc(doc(db, 'system', 'config'));
+        if (snap.exists()) {
+          setSysConfig(sanitizeFirestoreData(snap.data()));
+        }
+      } catch (e) { console.warn("Global configuration node inaccessible."); }
+    };
+
+    fetchConfig();
+    checkKeySelection();
+
+    let userUnsub: (() => void) | null = null;
+
+    const unsubscribeAuth = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (userUnsub) { userUnsub(); userUnsub = null; }
+
+      if (firebaseUser) {
+        userUnsub = onSnapshot(doc(db, 'users', firebaseUser.uid), (docSnap) => {
+          if (docSnap.exists()) {
+            const rawData = docSnap.data();
+            const sanitizedData = sanitizeFirestoreData(rawData) as User;
+            
+            // SECURITY NODE: Enforce single-device session integrity
+            if (sanitizedData.role === UserRole.STUDENT) {
+              const localSid = localStorage.getItem('csn_session_id');
+              if (sanitizedData.currentSessionId && localSid && sanitizedData.currentSessionId !== localSid) {
+                setSessionConflict(true);
+              } else {
+                setSessionConflict(false);
+              }
+            }
+
+            const { id: _id, ...rest } = sanitizedData;
+            setUser({ id: firebaseUser.uid, ...rest });
+          } else {
+            setUser({ id: firebaseUser.uid, email: firebaseUser.email || '', role: UserRole.STUDENT, isVerified: true, createdAt: new Date().toISOString() } as User);
+          }
+          setInitializing(false);
+        }, (err) => {
+          console.error("User node sync fault:", err);
+          setInitializing(false);
+        });
+      } else {
+        setUser(null);
+        setInitializing(false);
+        setSessionConflict(false);
+      }
+    });
+
+    return () => {
+      unsubscribeAuth();
+      if (userUnsub) userUnsub();
+    };
   }, []);
 
-  useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
-    }
-    if (messages.length > 1) {
-      const safeMessages = messages.map(m => ({
-        role: m.role,
-        content: typeof m.content === 'string' ? m.content : '[Non-String Data]',
-        node: m.node ? String(m.node) : undefined,
-        errorType: m.errorType
-      }));
-      try {
-        localStorage.setItem('csn_tutor_chat', JSON.stringify(safeMessages));
-      } catch (e) {
-        console.error("Local storage sync fault:", e);
-      }
-    }
-  }, [messages, isLoading]);
-
-  const handleRequestAccess = async () => {
+  const handleReauthorizeSession = async () => {
     if (!auth.currentUser) return;
-    setIsRequesting(true);
+    const newSid = crypto.randomUUID();
+    localStorage.setItem('csn_session_id', newSid);
     try {
       await updateDoc(doc(db, 'users', auth.currentUser.uid), {
-        intelligenceRequested: true
+        currentSessionId: newSid
       });
-      setCurrentUserData(prev => prev ? { ...prev, intelligenceRequested: true } : null);
-    } catch (e) {
-      alert("Transmission failure. Check network node.");
-    } finally {
-      setIsRequesting(false);
-    }
+      setSessionConflict(false);
+    } catch (e) { alert("Session re-claim protocol failure."); }
   };
 
-  const handleSend = async (manualQuery?: string) => {
-    const queryToUse = typeof manualQuery === 'string' ? manualQuery : input.trim();
-    if (!queryToUse || isLoading) return;
-
-    const history = messages
-      .filter(m => m.role !== 'error' && m.node !== 'system')
-      .slice(-10)
-      .map(m => ({ 
-        role: (m.role === 'model' ? 'model' : 'user') as 'user' | 'model', 
-        content: String(m.content) 
-      }));
-
-    if (typeof manualQuery !== 'string') {
-      setMessages(prev => [...prev, { role: 'user', content: queryToUse }]);
-      setInput('');
-    }
-
-    setIsLoading(true);
-    try {
-      const context = currentUserData ? { program: currentUserData.program || '', council: currentUserData.council || '' } : undefined;
-      const response = await getTutorResponse(queryToUse, history, context);
-      setMessages(prev => [...prev, { role: 'model', content: String(response.text || ''), node: String(response.node || 'unknown') }]);
-    } catch (error: any) {
-      const isAuthError = error.message === 'AUTHORIZATION_REQUIRED';
-      setMessages(prev => [...prev, { 
-        role: 'error', 
-        content: isAuthError 
-          ? `### Authorization Required\nGroq API Key is missing. Please set **GROQ_API_KEY** in your Vercel Environment Variables and **redeploy** your application.`
-          : `### Neural Link Fault\n${String(error.message || "Diagnostic connection failure.")}`,
-        errorType: isAuthError ? 'auth' : 'generic'
-      }]);
-    } finally { setIsLoading(false); }
+  const handleAuthorize = async () => {
+    const aistudio = (window as any).aistudio;
+    if (aistudio) {
+      await aistudio.openSelectKey();
+      setNeedsKey(false);
+    } else { alert("Outside AI Studio context. Set API_KEY manually."); }
   };
 
-  const toggleViva = async () => {
-    alert("Live Audio Node requires Gemini Live API (Disabled in Groq Mode).");
-  };
+  const handleLogout = () => signOut(auth);
 
-  if (isDataLoaded && !currentUserData?.intelligenceApproved && currentUserData?.role !== UserRole.ADMIN) {
-    const hasRequested = currentUserData?.intelligenceRequested;
-
-    return (
-      <div className="flex-1 min-h-0 flex flex-col items-center justify-center text-center p-6 md:p-12 bg-slate-950 border border-slate-900 md:rounded-[48px] rounded-3xl animate-in overflow-hidden relative">
-         <div className="absolute inset-0 bg-blue-600/5 blur-[120px] rounded-full animate-pulse"></div>
-         <div className="relative z-10 flex flex-col items-center w-full max-w-lg">
-            <div className={`w-16 h-16 md:w-24 md:h-24 ${hasRequested ? 'bg-orange-600/10 border-orange-500/20' : 'bg-red-600/10 border-red-500/20'} rounded-2xl md:rounded-[40px] flex items-center justify-center text-3xl md:text-5xl mb-6 md:mb-8 border shadow-2xl`}>
-               {hasRequested ? '📡' : '🔓'}
-            </div>
-            <h2 className="text-2xl md:text-5xl font-black text-white uppercase tracking-tighter italic mb-3 md:mb-4">
-               {hasRequested ? 'Request Processing' : 'Access Restricted'}
-            </h2>
-            <p className="text-slate-500 text-[10px] md:text-base font-bold uppercase tracking-[0.15em] md:tracking-[0.2em] leading-relaxed md:leading-loose mb-8 md:mb-10">
-               {hasRequested 
-                 ? "Administrative clearance is being verified for your practitioner profile. Telemetry link will activate shortly." 
-                 : "The AI Intelligence Node requires explicit administrative clearance. Request a neural link to begin technical tutoring."
-               }
-            </p>
-            <div className="flex flex-col md:flex-row gap-3 md:gap-4 w-full md:w-auto">
-               {!hasRequested ? (
-                 <button 
-                   onClick={handleRequestAccess}
-                   disabled={isRequesting}
-                   className="w-full md:w-auto px-10 py-4 md:px-12 md:py-5 bg-blue-600 text-white rounded-xl md:rounded-2xl font-black uppercase text-[9px] md:text-[10px] tracking-widest shadow-xl active:scale-95 transition-all hover:bg-blue-700 flex items-center justify-center gap-3"
-                 >
-                   {isRequesting ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div> : null}
-                   REQUEST NEURAL ACCESS
-                 </button>
-               ) : (
-                 <button className="w-full md:w-auto px-8 py-4 md:px-10 md:py-4 bg-slate-900 text-orange-500 border border-orange-500/20 rounded-xl md:rounded-2xl font-black uppercase text-[9px] md:text-[10px] tracking-widest cursor-default">
-                   Status: Awaiting Node Approval
-                 </button>
-               )}
-               <button onClick={() => window.location.reload()} className="w-full md:w-auto px-8 py-4 md:px-10 md:py-4 bg-white/5 text-white border border-white/10 rounded-xl md:rounded-2xl font-black uppercase text-[9px] md:text-[10px] tracking-widest hover:bg-white/10 transition-all">
-                  Refresh Sync
-               </button>
-            </div>
-         </div>
-      </div>
-    );
+  if (needsKey) return <KeySelectionScreen onAuthorize={handleAuthorize} />;
+  if (initializing) return <div className="h-screen bg-slate-950 flex items-center justify-center"><div className="w-10 h-10 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div></div>;
+  if (!user) return <Auth onLogin={setUser} systemConfig={sysConfig} />;
+  
+  // FACULTY LOCK: Unverified instructors are blocked from the main layout
+  if (user.role === UserRole.INSTRUCTOR && !user.isVerified) {
+    return <InstructorPendingScreen onLogout={handleLogout} />;
   }
 
-  const isEng = currentUserData?.council === 'NEC';
+  if (sessionConflict) return <SessionConflictScreen onReauthorize={handleReauthorizeSession} />;
+
+  const isExpired = user.role === UserRole.STUDENT && 
+                    user.subscriptionEnd && 
+                    new Date(user.subscriptionEnd).getTime() < Date.now();
 
   return (
-    <div className="flex flex-1 flex-col bg-slate-950 border border-slate-900 md:rounded-[48px] rounded-3xl overflow-hidden shadow-2xl relative min-h-0 transition-all">
-      <div className="flex-1 flex flex-col relative min-w-0 h-full">
-        <header className="p-3 md:p-6 border-b border-slate-900 bg-slate-950/80 backdrop-blur-2xl flex items-center justify-between shrink-0 z-20">
-          <div className="flex items-center gap-3 md:gap-5">
-            <div className={`w-8 h-8 md:w-14 md:h-14 rounded-lg md:rounded-[20px] flex items-center justify-center text-base md:text-2xl shadow-2xl ${isEng ? 'bg-orange-600 shadow-orange-600/20' : 'bg-blue-600 shadow-blue-600/20'} transition-all duration-700 relative overflow-hidden group`}>
-              <div className="absolute inset-0 bg-white/10 opacity-0 group-hover:opacity-100 transition-opacity"></div>
-              {isEng ? '⚙️' : '⚡'}
-            </div>
-            <div className="min-w-0">
-              <h2 className="font-black text-[10px] md:text-lg tracking-tight text-white uppercase leading-none italic truncate">{isEng ? 'Engineering Node' : 'Intelligence Hub'}</h2>
-              <p className="text-[6px] md:text-[9px] text-slate-500 font-black uppercase tracking-[0.2em] mt-1">Status: Active</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-             <button onClick={toggleViva} className={`flex items-center gap-1.5 md:gap-3 px-3 md:px-5 py-2 md:py-3.5 rounded-lg md:rounded-2xl transition-all font-black text-[7px] md:text-[9px] uppercase tracking-widest border ${vivaSession ? 'bg-red-600 border-red-500 text-white shadow-2xl shadow-red-600/20' : 'bg-slate-900 border-slate-800 text-slate-500 hover:text-white hover:border-blue-500/50'}`}>
-                {vivaSession ? <WaveformVisualizer /> : <span className="text-sm md:text-lg">🎙️</span>}
-                <span className="hidden xs:inline">{vivaSession ? 'Stop' : 'Live Sync'}</span>
-             </button>
-          </div>
-        </header>
-        
-        <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 md:p-10 space-y-6 md:space-y-12 scrollbar-hide scroll-smooth">
-          {messages.map((msg, i) => (
-            <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} animate-in fade-in slide-in-from-bottom-2 duration-500`}>
-              <div className={`max-w-[92%] md:max-w-[85%] p-4 md:p-10 rounded-2xl md:rounded-[40px] relative transition-all ${
-                msg.role === 'user' ? 'bg-blue-600 text-white shadow-2xl shadow-blue-900/20 border border-white/10 rounded-tr-none' : 
-                msg.role === 'error' ? 'bg-red-600/10 border border-red-500/30 text-red-100' :
-                'bg-slate-900/40 text-slate-200 border border-slate-800 rounded-tl-none'
-              }`}>
-                {msg.role === 'user' && (
-                  <div className="absolute -top-2 right-2 md:right-8 px-1.5 md:px-3 py-0.5 md:py-1 bg-blue-700 rounded-full text-[5px] md:text-[8px] font-black uppercase tracking-widest text-blue-200 border border-white/10 shadow-lg">Practitioner</div>
-                )}
-                <AcademicContent text={msg.content} node={msg.node} />
-              </div>
-            </div>
-          ))}
-          {isLoading && (
-            <div className="flex justify-start animate-in fade-in duration-300">
-              <div className="bg-slate-900/50 px-5 md:px-10 py-3 md:py-7 rounded-xl md:rounded-[32px] border border-slate-800/60 flex items-center gap-3 md:gap-4 shadow-2xl">
-                <div className="flex gap-1 md:gap-2">
-                  <div className="w-1 md:w-2 h-1 md:h-2 rounded-full animate-bounce [animation-duration:0.8s] [animation-delay:-0.3s] bg-blue-500"></div>
-                  <div className="w-1 md:w-2 h-1 md:h-2 rounded-full animate-bounce [animation-duration:0.8s] [animation-delay:-0.15s] bg-blue-500"></div>
-                  <div className="w-1 md:w-2 h-1 md:h-2 rounded-full animate-bounce [animation-duration:0.8s] bg-blue-500"></div>
-                </div>
-                <div className="flex flex-col">
-                  <span className="text-[7px] md:text-[10px] font-black uppercase text-slate-500 tracking-[0.2em]">Neural Processing</span>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-        
-        <div className="p-3 md:p-8 bg-slate-950/90 backdrop-blur-3xl border-t border-slate-900 z-10">
-          <div className="max-w-5xl mx-auto flex gap-2 md:gap-4 bg-slate-900/80 p-1.5 md:p-3 rounded-2xl md:rounded-[36px] border border-white/5 focus-within:border-blue-500/40 transition-all shadow-2xl group">
-              <input value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSend()} placeholder={isEng ? "Ask technical query..." : "Ask academic query..."} className="flex-1 bg-transparent border-none focus:ring-0 text-xs md:text-lg px-3 md:px-6 text-white placeholder-slate-700 font-bold" />
-              <button onClick={() => handleSend()} disabled={isLoading || !input.trim()} className={`w-10 h-10 md:w-16 md:h-16 rounded-xl md:rounded-2xl flex items-center justify-center text-white shadow-2xl transition-all active:scale-95 shrink-0 ${isLoading ? 'bg-slate-800' : 'bg-blue-600 shadow-blue-600/20'}`}>
-                {isLoading ? <div className="w-4 h-4 md:w-6 md:h-6 border-2 border-white/30 border-t-white rounded-full animate-spin"></div> : <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4" className="md:w-6 md:h-6"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>}
-              </button>
-          </div>
-        </div>
-        <div className="px-4 md:px-10 pb-6">
-          <GovernmentDisclaimer />
-        </div>
-      </div>
-    </div>
+    <ErrorBoundary>
+      <Router>
+        <Routes>
+          <Route path="/" element={<Layout user={user} onLogout={handleLogout} />}>
+            {isExpired ? (
+              <>
+                <Route index element={<ExpiredAccessScreen onLogout={handleLogout} />} />
+                <Route path="plans" element={<Plans user={user} />} />
+                <Route path="profile" element={<Profile user={user} />} />
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </>
+            ) : (
+              <>
+                <Route index element={<Dashboard user={user} />} />
+                <Route path="tutor" element={<Tutor />} />
+                <Route path="library" element={<Library user={user} />} />
+                <Route path="quiz" element={<QuizHub user={user} />} />
+                <Route path="lab" element={<PracticalLab user={user} />} />
+                <Route path="news" element={<News />} />
+                <Route path="profile" element={<Profile user={user} />} />
+                <Route path="settings" element={<Settings />} />
+                <Route path="plans" element={<Plans user={user} />} />
+                {user.role === UserRole.INSTRUCTOR && <Route path="instructor" element={<Instructor user={user} />} />}
+                {user.role === UserRole.ADMIN && <Route path="admin" element={<AdminPortal user={user} />} />}
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </>
+            )}
+          </Route>
+        </Routes>
+      </Router>
+    </ErrorBoundary>
   );
 };
 
-export default Tutor;
+export default App;

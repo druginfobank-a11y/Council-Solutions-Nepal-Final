@@ -8,8 +8,6 @@ import { db } from '../services/firebase';
 import { collection, query, where, onSnapshot, doc, getDoc } from 'firebase/firestore';
 import { sanitizeUrl } from '../services/storageService';
 
-import GovernmentDisclaimer from './GovernmentDisclaimer';
-
 const { NavLink, Outlet, useNavigate, useLocation } = ReactRouter as any;
 
 interface LayoutProps {
@@ -43,7 +41,6 @@ const ActionToast: React.FC<{ notification: Notification; onDismiss: () => void;
   </div>
 );
 
-
 const Layout: React.FC<LayoutProps> = ({ user, onLogout }) => {
   const navigate = useNavigate();
   const location = useLocation();
@@ -56,7 +53,6 @@ const Layout: React.FC<LayoutProps> = ({ user, onLogout }) => {
 
   // FULL SCREEN DETECTION NODE
   const isQuizHubActive = location.pathname === '/quiz';
-  const isLegalActive = location.pathname.startsWith('/legal');
 
   useEffect(() => {
     const fetchConfig = async () => {
@@ -102,12 +98,10 @@ const Layout: React.FC<LayoutProps> = ({ user, onLogout }) => {
   const getNavItems = () => {
     const common = [{ label: 'Dashboard', path: '/', icon: ICONS.Dashboard }, { label: 'Library', path: '/library', icon: ICONS.Library }];
     
-    const isLocked = !user.intelligenceApproved && user.role !== UserRole.ADMIN;
-    
-    const lockedIcon = (Icon: any) => (props: any) => (
+    const aiIcon = (props: any) => (
       <div className="relative">
-        <Icon {...props} />
-        {isLocked && (
+        <ICONS.Tutor {...props} />
+        {!user.intelligenceApproved && user.role !== UserRole.ADMIN && (
           <div className="absolute -top-1 -right-1 bg-slate-900 rounded-full p-0.5 border border-white/10">
             <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="4"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
           </div>
@@ -119,16 +113,15 @@ const Layout: React.FC<LayoutProps> = ({ user, onLogout }) => {
       return [
         ...common, 
         { label: 'Quiz', path: '/quiz', icon: ICONS.Quiz }, 
-        { label: 'Intelligence', path: '/tutor', icon: lockedIcon(ICONS.Tutor) }, 
-        { label: 'Node', path: '/intelligence-node', icon: lockedIcon(ICONS.Brain) }
+        { label: 'Intelligence', path: '/tutor', icon: aiIcon }
       ];
     }
     if (user.role === UserRole.INSTRUCTOR) {
       return [
         ...common, 
-        { label: 'Instructor', path: '/instructor', icon: ICONS.Dashboard },
+        { label: 'Instructor', path: '/instructor', icon: ICONS.Instructor },
         { label: 'Quiz Hub', path: '/quiz', icon: ICONS.Quiz }, 
-        { label: 'Intelligence', path: '/tutor', icon: lockedIcon(ICONS.Tutor) }
+        { label: 'Intelligence', path: '/tutor', icon: aiIcon }
       ];
     }
     if (user.role === UserRole.ADMIN) {
@@ -174,13 +167,13 @@ const Layout: React.FC<LayoutProps> = ({ user, onLogout }) => {
       )}
       
       {/* SIDEBAR - CONDITIONALLY RENDERED */}
-      {!isQuizHubActive && !isLegalActive && (
+      {!isQuizHubActive && (
         <aside className="hidden md:flex flex-col w-72 bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 p-8 shadow-sm z-30 h-full overflow-hidden shrink-0">
           <div className="mb-10 flex items-center gap-4 shrink-0">
             <div className="w-12 h-12 shrink-0">
               {!isConfigLoaded ? <div className="w-full h-full bg-slate-100 dark:bg-slate-800 rounded-2xl animate-pulse"></div> : sysConfig.logoUrl ? <img src={sanitizeUrl(sysConfig.logoUrl)} className="w-full h-full object-contain drop-shadow-md" alt="Logo" /> : <div className="w-full h-full bg-blue-600 rounded-2xl flex items-center justify-center font-black text-2xl shadow-xl text-white">C</div>}
             </div>
-            <div className="flex flex-col"><span className="font-black text-sm tracking-tighter uppercase dark:text-white truncate">{sysConfig.platformName || 'Practice Node'}</span><span className="text-[8px] font-black text-amber-600 dark:text-amber-500 uppercase tracking-widest mt-1">Academic Practice Hub</span></div>
+            <div className="flex flex-col"><span className="font-black text-sm tracking-tighter uppercase dark:text-white truncate">{sysConfig.platformName || 'Council Node'}</span><span className="text-[8px] font-black text-blue-500 uppercase tracking-widest mt-1">Official Hub Nepal</span></div>
           </div>
           <nav className="flex-1 space-y-1.5 overflow-y-auto scrollbar-hide">
             {navItems.map((item) => (
@@ -197,35 +190,29 @@ const Layout: React.FC<LayoutProps> = ({ user, onLogout }) => {
                 </NavLink>
               ))}
             </div>
-            <GovernmentDisclaimer forceShow={sysConfig.showDisclaimers} />
           </nav>
           <button onClick={onLogout} className="mt-6 flex items-center gap-4 p-4 rounded-2xl text-red-500 hover:bg-red-50 dark:hover:bg-red-900/10 transition-all font-bold text-[13px] uppercase tracking-tight shrink-0 border-t border-slate-50 dark:border-slate-800"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/></svg>Terminate Session</button>
         </aside>
       )}
 
       <main className={`flex-1 flex flex-col min-w-0 h-full overflow-hidden main-content-card bg-slate-50 dark:bg-slate-950 transition-all duration-500 ${isMenuOpen ? 'pushed' : ''}`}>
-        {!isQuizHubActive && !isLegalActive && (
+        {!isQuizHubActive && (
           <header className="md:hidden h-24 shrink-0 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between px-6 z-20 transition-colors">
             <div className="flex items-center gap-4">
                <div className="w-12 h-12 shadow-sm rounded-xl overflow-hidden bg-slate-50 dark:bg-slate-800 flex items-center justify-center border border-slate-100 dark:border-white/5">
                  {sysConfig.logoUrl ? <img src={sanitizeUrl(sysConfig.logoUrl)} className="w-full h-full object-contain" alt="Logo" /> : <div className="w-full h-full bg-blue-600 flex items-center justify-center font-black text-white text-xl">C</div>}
                </div>
-               <div><span className="block font-black text-[12px] uppercase tracking-tighter dark:text-white truncate max-w-[160px] leading-tight">{sysConfig.platformName || 'Practice Node'}</span><span className="text-[7px] font-black text-amber-600 dark:text-amber-500 uppercase tracking-widest mt-1">Academic Practice Hub</span></div>
+               <div><span className="block font-black text-[12px] uppercase tracking-tighter dark:text-white truncate max-w-[160px] leading-tight">{sysConfig.platformName || 'Council Node'}</span><span className="text-[7px] font-black text-blue-500 uppercase tracking-widest mt-1">Official Hub Nepal</span></div>
             </div>
             <div className="flex items-center gap-4">{user.role === UserRole.ADMIN && pendingTotal > 0 && <div className="w-8 h-8 bg-red-600 rounded-full flex items-center justify-center text-white text-[10px] font-black shadow-lg animate-pulse">{pendingTotal}</div>}<span className="w-2.5 h-2.5 rounded-full bg-green-500 animate-pulse border-2 border-white dark:border-slate-900"></span></div>
           </header>
         )}
 
-        <div className={`flex-1 overflow-y-auto scroll-smooth scrollbar-hide ${isQuizHubActive || isLegalActive ? 'p-0 h-full w-full' : 'p-4 md:p-12'}`}>
+        <div className={`flex-1 overflow-y-auto scroll-smooth scrollbar-hide ${isQuizHubActive ? 'p-0 h-full w-full' : 'p-4 md:p-12'}`}>
           <Outlet />
-          {!isQuizHubActive && !isLegalActive && (
-            <div className="mt-12 pb-12 border-t border-slate-200 dark:border-slate-800 pt-12">
-              <GovernmentDisclaimer forceShow={sysConfig.showDisclaimers} />
-            </div>
-          )}
         </div>
 
-        {!isQuizHubActive && !isLegalActive && (
+        {!isQuizHubActive && (
           <nav className="md:hidden h-20 shrink-0 bg-white dark:bg-slate-900 border-t border-slate-100 dark:border-slate-800 flex items-center justify-around px-2 z-20 pb-safe shadow-[0_-10px_30px_rgba(0,0,0,0.05)]">
             {navItems.slice(0, 4).map((item) => (
               <NavLink key={item.path} to={item.path} className={({ isActive }: { isActive: boolean }) => `flex flex-col items-center gap-1.5 p-3 transition-all relative ${isActive ? 'text-blue-600 scale-110' : 'text-slate-400'}`}>
@@ -263,7 +250,6 @@ const Layout: React.FC<LayoutProps> = ({ user, onLogout }) => {
                       <item.icon className="w-6 h-6 shrink-0" /><span className="font-black text-xs uppercase tracking-widest">{item.label}</span>
                     </NavLink>
                   ))}
-                  <GovernmentDisclaimer forceShow={sysConfig.showDisclaimers} />
                   <button onClick={onLogout} className="w-full flex items-center gap-4 p-5 rounded-[24px] text-red-500 hover:bg-red-50 dark:hover:bg-red-950/20 transition-all font-black text-xs uppercase tracking-widest mt-8 border border-red-100 dark:border-red-900/30"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/></svg>Exit Hub</button>
                </nav>
                <footer className="mt-auto pt-8 border-t border-slate-100 dark:border-slate-800"><div className="flex items-center gap-2 mb-4"><div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div><p className="text-[8px] font-black text-slate-400 dark:text-slate-500 uppercase tracking-[0.4em]">Node Sync Active</p></div><p className="text-[8px] font-black text-slate-300 dark:text-slate-700 uppercase tracking-[0.6em]">CPN NEPAL • V3.6.2</p></footer>

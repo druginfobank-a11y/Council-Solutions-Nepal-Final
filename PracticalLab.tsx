@@ -5,11 +5,9 @@ import { User, UserRole, LearningMaterial, SystemSettings, ExamResult } from '..
 import { sanitizeUrl, uploadToBunny } from '../services/storageService';
 import { db } from '../services/firebase';
 import { collection, query, onSnapshot, orderBy, doc, getDoc, where } from 'firebase/firestore';
-import { generateAudioBriefing, speakText } from '../services/geminiService';
+import { generateAudioBriefing, decodeRawPCM } from '../services/geminiService';
 import { publishLearningMaterial, getCurriculum } from '../services/contentService';
 import { PROGRAMS_DATA } from '../constants';
-
-import GovernmentDisclaimer from '../components/GovernmentDisclaimer';
 
 interface LibraryProps { user: User; }
 
@@ -51,7 +49,6 @@ const Library: React.FC<LibraryProps> = ({ user }) => {
     unit: '',
     type: 'pdf',
     program: user.program || 'Common',
-    programs: [user.program || 'Common'] as string[],
     council: user.council || 'NPC'
   });
   const [tempFile, setTempFile] = useState<File | null>(null);
@@ -94,8 +91,6 @@ const Library: React.FC<LibraryProps> = ({ user }) => {
       const qResults = query(collection(db, 'exam_results'), where('userId', '==', user.id));
       const unsubResults = onSnapshot(qResults, (snap) => {
         setExamResults(snap.docs.map(d => d.data() as ExamResult));
-      }, (err) => {
-        console.warn("Library results sync failure:", err);
       });
       return () => unsubResults();
     }
@@ -114,19 +109,13 @@ const Library: React.FC<LibraryProps> = ({ user }) => {
       const userProg = user.program?.toLowerCase();
       const userCouncil = user.council?.toLowerCase();
 
-      setMaterials(user.role === UserRole.STUDENT || user.role === UserRole.INSTRUCTOR
+      setMaterials(user.role === UserRole.STUDENT 
         ? allData.filter(m => {
             const mProg = m.program?.toLowerCase();
-            const mProgs = (m.programs || []).map(p => p.toLowerCase());
             const mCouncil = m.council?.toLowerCase();
             const isApproved = m.status === 'approved';
-            const isGlobal = mProg === 'all programs' || mProg === 'common' || mProgs.includes('all programs') || mProgs.includes('common');
-            const isMatch = (userProg && (mProg === userProg || mProgs.includes(userProg))) || (userCouncil && mCouncil === userCouncil);
-            const isOwn = m.uploadedBy === user.id;
-            
-            if (user.role === UserRole.INSTRUCTOR) {
-              return (isApproved && (isGlobal || isMatch)) || isOwn;
-            }
+            const isGlobal = mProg === 'all programs' || mProg === 'common';
+            const isMatch = (userProg && mProg === userProg) || (userCouncil && mCouncil === userCouncil);
             return isApproved && (isGlobal || isMatch);
           })
         : allData.filter(m => m.status === 'approved' || m.uploadedBy === user.id || user.role === UserRole.ADMIN)
@@ -149,10 +138,17 @@ const Library: React.FC<LibraryProps> = ({ user }) => {
     if (isBriefingPlaying) return;
     setIsBriefingLoading(true);
     try {
-      const briefingText = await generateAudioBriefing(`Briefing for ${material.title}. Description: ${material.description || 'No additional details.'}`);
-      if (briefingText) {
+      if (!audioContextRef.current) audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+      const base64Audio = await generateAudioBriefing(`Briefing for ${material.title}. Description: ${material.description || 'No additional details.'}`);
+      if (base64Audio) {
+        const bytes = Uint8Array.from(atob(base64Audio), c => c.charCodeAt(0));
+        const audioBuffer = await decodeRawPCM(bytes, audioContextRef.current, 24000);
+        const source = audioContextRef.current.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(audioContextRef.current.destination);
+        source.onended = () => setIsBriefingPlaying(false);
         setIsBriefingPlaying(true);
-        speakText(briefingText, () => setIsBriefingPlaying(false));
+        source.start(0);
       }
     } catch (e) { alert("Audio Node failure."); }
     finally { setIsBriefingLoading(false); }
@@ -174,8 +170,6 @@ const Library: React.FC<LibraryProps> = ({ user }) => {
       
       await publishLearningMaterial({
         ...uploadData, 
-        program: (uploadData.programs || [])[0] || 'Common',
-        programs: uploadData.programs,
         url: finalUrl,
         uploadedBy: user.id, 
         status: user.role === UserRole.ADMIN ? 'approved' : 'pending'
@@ -383,25 +377,8 @@ const Library: React.FC<LibraryProps> = ({ user }) => {
                    </div>
 
                    <div className="space-y-3 md:space-y-4">
-                      <label className="text-[7px] md:text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">Distribution Hub (Multiple)</label>
-                      <div className="flex flex-wrap gap-2 mb-2">
-                        {(uploadData.programs || []).map(p => (
-                          <span key={p} className="bg-blue-600 text-white text-[8px] font-black px-3 py-1.5 rounded-lg uppercase tracking-widest flex items-center gap-2">
-                            {p}
-                            <button onClick={() => setUploadData({...uploadData, programs: (uploadData.programs || []).filter(x => x !== p)})} className="hover:text-red-300">×</button>
-                          </span>
-                        ))}
-                      </div>
-                      <select 
-                        value="" 
-                        onChange={e => {
-                          if (e.target.value && !(uploadData.programs || []).includes(e.target.value)) {
-                            setUploadData({...uploadData, programs: [...(uploadData.programs || []), e.target.value]});
-                          }
-                        }} 
-                        className="w-full h-12 md:h-14 bg-slate-50 dark:bg-slate-950 border border-slate-100 dark:border-slate-800 rounded-xl px-4 md:px-6 text-[8px] md:text-[10px] font-black uppercase dark:text-white outline-none"
-                      >
-                         <option value="">+ Add Program Node</option>
+                      <label className="text-[7px] md:text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">Distribution Hub</label>
+                      <select value={uploadData.program} onChange={e => setUploadData({...uploadData, program: e.target.value})} className="w-full h-12 md:h-14 bg-slate-50 dark:bg-slate-950 border border-slate-100 dark:border-slate-800 rounded-xl px-4 md:px-6 text-[8px] md:text-[10px] font-black uppercase dark:text-white outline-none">
                          <option value="All Programs">All Programs</option>
                          {activePrograms.map(p => <option key={p} value={p}>{p}</option>)}
                       </select>
@@ -438,9 +415,6 @@ const Library: React.FC<LibraryProps> = ({ user }) => {
       )}
 
       {renderReader()}
-      <div className="pb-10">
-        <GovernmentDisclaimer forceShow={sysConfig?.showDisclaimers} />
-      </div>
     </div>
   );
 };

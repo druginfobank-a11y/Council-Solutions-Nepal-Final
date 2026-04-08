@@ -1,20 +1,13 @@
 
 import React, { useMemo, useState, useEffect } from 'react';
-import GovernmentDisclaimer from '../components/GovernmentDisclaimer';
 import { User, UserRole, ExamResult, Quiz, LearningMaterial, StudyTask, Ad } from '../types';
 import * as ReactRouter from 'react-router-dom';
 import { db } from '../services/firebase';
 import { collection, query, where, onSnapshot, limit, orderBy } from 'firebase/firestore';
 import { verifyBunnyConnection, sanitizeUrl, ensureExternalLink } from '../services/storageService';
-import { subscribeToTasks, addTask, updateTaskStatus, deleteTaskFromCloud, getWeeklyLeaderboard } from '../services/userService';
+import { subscribeToTasks, addTask, updateTaskStatus, deleteTaskFromCloud } from '../services/userService';
 import { getProgramMasteryRankings } from '../services/contentService';
 import { createPortal } from 'react-dom';
-import { motion, AnimatePresence } from 'motion/react';
-import { 
-  Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer,
-  BarChart, Bar, XAxis, YAxis, Tooltip, Cell
-} from 'recharts';
-import confetti from 'canvas-confetti';
 
 const { useNavigate } = ReactRouter as any;
 
@@ -246,11 +239,6 @@ const DashboardHero: React.FC<{
               <span className={`px-3 py-1 rounded-full bg-${accentColor}-600/10 border border-${accentColor}-500/20 text-${accentColor}-500 text-[8px] font-black uppercase tracking-[0.3em]`}>
                 {user.role} NODE ACTIVE
               </span>
-              {typeof window !== 'undefined' && window.location.search.includes('reviewer=true') && (
-                <span className="px-3 py-1 rounded-full bg-amber-600/10 border border-amber-500/20 text-amber-500 text-[8px] font-black uppercase tracking-[0.3em]">
-                  ACADEMIC PRACTICE
-                </span>
-              )}
               <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span>
             </div>
             <h1 className="text-3xl md:text-5xl font-black text-white uppercase tracking-tighter italic leading-none mb-3 truncate">
@@ -553,7 +541,7 @@ const InstructorDashboard: React.FC<{ user: User }> = ({ user }) => {
 
   return (
     <div className="space-y-8 animate-in pb-32 max-w-7xl mx-auto px-4 md:px-0">
-      <DashboardHero user={user} title="Educator Node" subtitle="Manage academic resources and provision knowledge assets." actionLabel="Architect Quiz" onAction={() => navigate('/quiz')} accentColor="purple" icon="📚" />
+      <DashboardHero user={user} title="Educator Node" subtitle="Manage academic logic flows and provision knowledge assets." actionLabel="Architect Quiz" onAction={() => navigate('/quiz')} accentColor="purple" icon="📚" />
       <BulletinBanner ads={ads} />
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
          <div className="lg:col-span-8 space-y-8">
@@ -592,7 +580,6 @@ const StudentDashboard: React.FC<{ user: User }> = ({ user }) => {
   const [tasks, setTasks] = useState<StudyTask[]>([]);
   const [userRank, setUserRank] = useState<number | null>(null);
   const [totalPeers, setTotalPeers] = useState<number>(0);
-  const [leaderboard, setLeaderboard] = useState<any[]>([]);
 
   useEffect(() => {
     const unsubRes = onSnapshot(query(collection(db, 'exam_results'), where('userId', '==', user.id)), snap => setResults(snap.docs.map(d => d.data() as ExamResult)), (err) => console.warn("Student node sync failure (results):", err));
@@ -604,9 +591,6 @@ const StudentDashboard: React.FC<{ user: User }> = ({ user }) => {
         const myRank = res.find(r => r.userId === user.id)?.rank;
         setUserRank(myRank || null);
       });
-
-      const unsubLeaderboard = getWeeklyLeaderboard(user.council, setLeaderboard);
-      return () => { unsubRes(); unsubAds(); unsubLeaderboard(); };
     }
     const unsubTasks = subscribeToTasks(user.id, setTasks, (err) => console.warn("Student node sync failure (tasks):", err));
     return () => { unsubRes(); unsubAds(); unsubTasks(); };
@@ -616,150 +600,30 @@ const StudentDashboard: React.FC<{ user: User }> = ({ user }) => {
 
   const isPremium = user.subscriptionEnd && new Date(user.subscriptionEnd).getTime() > Date.now();
 
-  const weaknessData = useMemo(() => {
-    if (!user.weaknesses) return [];
-    return Object.entries(user.weaknesses).map(([subject, count]) => ({
-      subject,
-      count,
-      fullMark: Math.max(...Object.values(user.weaknesses || {}), 10)
-    })).slice(0, 6);
-  }, [user.weaknesses]);
-
   return (
     <div className="space-y-8 animate-in pb-32 max-w-7xl mx-auto px-4 md:px-0">
-      <DashboardHero 
-        user={user} 
-        title={`Welcome, ${(user.name || 'Scholar').split(' ')[0]}`} 
-        subtitle="Your academic preparedness trajectory is synchronized." 
-        actionLabel="Launch Evaluation" 
-        onAction={() => navigate('/quiz')} 
-        accentColor="blue" 
-        icon="🎓" 
-      />
-      
+      <DashboardHero user={user} title={`Welcome, ${(user.name || 'Scholar').split(' ')[0]}`} subtitle="Your academic preparedness trajectory is synchronized." actionLabel="Launch Evaluation" onAction={() => navigate('/quiz')} accentColor="blue" icon="🎓" />
+      <BulletinBanner ads={ads} />
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
          <MetricCard label="Mastery Index" value={`${Math.round(avgMastery)}%`} color="blue" icon="🎯" />
-         <MetricCard label="Daily Streak" value={`${user.streakCount || 0} Days`} trend={user.dailyMcqCount ? `${user.dailyMcqCount}/5 MCQs` : '0/5 MCQs'} color="orange" icon="🔥" />
+         <MetricCard label="Logic Syncs" value={results.length} color="green" icon="✅" />
          <MetricCard label="Program Rank" value={userRank ? `#${userRank}` : 'Unranked'} trend={totalPeers > 1 ? `of ${totalPeers}` : undefined} color="purple" icon="🏆" />
          <MetricCard label="Node Status" value={isPremium ? 'PREMIUM' : 'EXPIRED'} color={isPremium ? 'orange' : 'red'} icon="⚡" />
       </div>
-
-      <BulletinBanner ads={ads} />
-
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-         <div className="lg:col-span-8 space-y-8">
-            <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 p-10 rounded-[56px] shadow-sm">
-               <div className="flex justify-between items-center mb-8">
-                  <h3 className="text-sm font-black uppercase tracking-tight dark:text-white italic">Mastery Trajectory</h3>
-                  <div className="flex items-center gap-2">
-                     <span className="w-2 h-2 rounded-full bg-blue-500"></span>
-                     <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Accuracy %</span>
-                  </div>
-               </div>
-               <AnalyticChart data={results.slice(-10).map(r => ({ label: r.quizTitle, value: r.percentage }))} color="#3b82f6" type="line" showBenchmarks={true} />
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-               <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 p-10 rounded-[56px] shadow-sm">
-                  <h3 className="text-sm font-black uppercase tracking-tight dark:text-white italic mb-8">Weakness Heatmap</h3>
-                  {weaknessData.length > 0 ? (
-                    <div className="h-64 w-full">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <RadarChart cx="50%" cy="50%" outerRadius="80%" data={weaknessData}>
-                          <PolarGrid stroke="#e2e8f0" />
-                          <PolarAngleAxis dataKey="subject" tick={{ fill: '#94a3b8', fontSize: 8, fontWeight: 900 }} />
-                          <Radar name="Weakness" dataKey="count" stroke="#ef4444" fill="#ef4444" fillOpacity={0.5} />
-                        </RadarChart>
-                      </ResponsiveContainer>
-                    </div>
-                  ) : (
-                    <div className="h-64 flex flex-col items-center justify-center opacity-20 text-center">
-                       <span className="text-4xl mb-4">📊</span>
-                       <p className="text-[10px] font-black uppercase tracking-widest">Insufficient Data for Heatmap</p>
-                    </div>
-                  )}
-               </div>
-
-               <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 p-10 rounded-[56px] shadow-sm">
-                  <h3 className="text-sm font-black uppercase tracking-tight dark:text-white italic mb-8">Academic Badges</h3>
-                  <div className="grid grid-cols-3 gap-4">
-                     {(user.badges || []).map((badge, i) => (
-                       <motion.div 
-                         key={i}
-                         initial={{ scale: 0 }}
-                         animate={{ scale: 1 }}
-                         whileHover={{ scale: 1.1, rotate: 5 }}
-                         className="flex flex-col items-center gap-2"
-                       >
-                          <div className="w-16 h-16 rounded-2xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-2xl shadow-lg">
-                             {badge === 'Consistent Scholar' ? '📅' : badge === 'Academic Legend' ? '👑' : '🏅'}
-                          </div>
-                          <span className="text-[7px] font-black text-slate-500 uppercase tracking-tight text-center leading-tight">{badge}</span>
-                       </motion.div>
-                     ))}
-                     {(!user.badges || user.badges.length === 0) && (
-                       <div className="col-span-3 py-10 text-center opacity-20">
-                          <p className="text-[10px] font-black uppercase tracking-widest">No Badges Earned Yet</p>
-                       </div>
-                     )}
-                  </div>
-               </div>
-            </div>
+         <div className="lg:col-span-8 bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 p-10 rounded-[56px] shadow-sm">
+            <h3 className="text-sm font-black uppercase tracking-tight dark:text-white italic mb-8">Mastery Trajectory</h3>
+            <AnalyticChart data={results.slice(-10).map(r => ({ label: r.quizTitle, value: r.percentage }))} color="#3b82f6" type="line" showBenchmarks={true} />
          </div>
-
-         <div className="lg:col-span-4 space-y-8">
-            <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 p-8 rounded-[48px] shadow-sm">
-               <div className="flex justify-between items-center mb-6">
-                  <h3 className="text-xs font-black uppercase tracking-widest dark:text-white">Weekly Leaderboard</h3>
-                  <span className="px-2 py-1 bg-blue-600/10 text-blue-600 rounded text-[7px] font-black uppercase tracking-widest">{user.council}</span>
-               </div>
-               <div className="space-y-4">
-                  {leaderboard.map((entry, i) => (
-                    <div key={i} className={`p-4 rounded-2xl flex items-center justify-between border ${entry.userId === user.id ? 'bg-blue-600/5 border-blue-600/20' : 'bg-slate-50 dark:bg-slate-950 border-slate-100 dark:border-slate-800'}`}>
-                       <div className="flex items-center gap-3">
-                          <span className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-black ${i === 0 ? 'bg-amber-100 text-amber-600' : i === 1 ? 'bg-slate-200 text-slate-600' : i === 2 ? 'bg-orange-100 text-orange-600' : 'bg-slate-100 text-slate-400'}`}>
-                             {i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `#${i + 1}`}
-                          </span>
-                          <div>
-                             <p className="text-[10px] font-black uppercase dark:text-white truncate max-w-[120px]">{entry.userName}</p>
-                             <p className="text-[7px] font-bold text-slate-400 uppercase">{entry.totalQuestions} Items</p>
-                          </div>
-                       </div>
-                       <span className="text-[11px] font-black text-blue-600">{Math.round(entry.percentage)}%</span>
-                    </div>
-                  ))}
-                  {leaderboard.length === 0 && <p className="text-center py-10 opacity-20 text-[10px] font-black uppercase">No Leaderboard Data</p>}
-               </div>
-            </div>
-
+         <div className="lg:col-span-4 space-y-6">
             <div className="bg-slate-900 border border-white/5 p-8 rounded-[48px] text-white shadow-2xl relative overflow-hidden group min-h-[250px] flex flex-col justify-between">
-               <div className="absolute top-0 right-0 p-8 opacity-10 text-8xl group-hover:scale-110 transition-transform">🧠</div>
-               {!user.intelligenceApproved && user.role !== UserRole.ADMIN && (
-                 <div className="absolute top-4 right-4 bg-red-500/20 border border-red-500/30 px-3 py-1 rounded-full flex items-center gap-2 z-20">
-                   <span className="text-[8px] font-black uppercase tracking-widest text-red-500">Locked</span>
-                   <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#ef4444" strokeWidth="3"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-                 </div>
-               )}
+               <div className="absolute top-0 right-0 p-8 opacity-10 text-8xl group-hover:scale-110 transition-transform">🎓</div>
                <div>
                   <h3 className="text-xl font-black uppercase tracking-tighter mb-2 italic">Neural Tutor</h3>
-                  <p className="text-xs font-bold text-slate-400 uppercase tracking-widest leading-relaxed">
-                    {!user.intelligenceApproved && user.role !== UserRole.ADMIN 
-                      ? "Administrative authorization required for neural synchronization." 
-                      : "24/7 Academic support Link synchronized."}
-                  </p>
+                  <p className="text-xs font-bold text-slate-400 uppercase tracking-widest leading-relaxed">24/7 Academic support Link synchronized.</p>
                </div>
-               <button 
-                 onClick={() => navigate('/tutor')} 
-                 className={`w-full py-4 rounded-2xl font-black uppercase text-[10px] tracking-widest shadow-xl transition-all ${
-                   !user.intelligenceApproved && user.role !== UserRole.ADMIN
-                     ? 'bg-slate-800 text-slate-500 border border-white/5'
-                     : 'bg-white text-slate-950 hover:scale-105'
-                 }`}
-               >
-                 {!user.intelligenceApproved && user.role !== UserRole.ADMIN ? 'Request Access' : 'Initiate Link'}
-               </button>
+               <button onClick={() => navigate('/tutor')} className="w-full py-4 bg-white text-slate-950 rounded-2xl font-black uppercase text-[10px] tracking-widest shadow-xl">Initiate Link</button>
             </div>
-
             <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 p-8 rounded-[48px] shadow-sm">
                <p className="text-[9px] font-black text-blue-500 uppercase tracking-widest mb-6">Study Directives</p>
                <div className="space-y-3 max-h-60 overflow-y-auto scrollbar-hide">
@@ -773,13 +637,9 @@ const StudentDashboard: React.FC<{ user: User }> = ({ user }) => {
             </div>
          </div>
       </div>
-      <div className="pb-10">
-        <GovernmentDisclaimer />
-      </div>
     </div>
   );
 };
-
 
 const Dashboard: React.FC<{ user: User }> = ({ user }) => {
   if (user.role === UserRole.ADMIN) return <AdminDashboard user={user} />;

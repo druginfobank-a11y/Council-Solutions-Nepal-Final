@@ -1,61 +1,32 @@
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { defineConfig, loadEnv } from 'vite';
+import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
 
-const CACHE_NAME = 'csn-v3.6.2';
-const STATIC_ASSETS = [
-  '/',
-  '/index.html',
-  '/manifest.json',
-  '/logo-192.png',
-  '/logo-512.png'
-];
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-// Install: Cache core static assets
-self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(STATIC_ASSETS);
-    })
-  );
-  self.skipWaiting();
-});
-
-// Activate: Clean up old caches
-self.addEventListener('activate', (event) => {
-  event.waitUntil(
-    caches.keys().then((cacheNames) => {
-      return Promise.all(
-        cacheNames.map((cacheName) => {
-          if (cacheName !== CACHE_NAME) {
-            return caches.delete(cacheName);
-          }
-        })
-      );
-    })
-  );
-  self.clients.claim();
-});
-
-// Fetch: Stale-While-Revalidate strategy
-// This allows the app to load instantly from cache while updating it in the background
-self.addEventListener('fetch', (event) => {
-  // Skip cross-origin requests (Firebase, Gemini API, etc. should handle their own caching or stay real-time)
-  if (!event.request.url.startsWith(self.location.origin)) {
-    return;
-  }
-
-  event.respondWith(
-    caches.open(CACHE_NAME).then((cache) => {
-      return cache.match(event.request).then((cachedResponse) => {
-        const fetchPromise = fetch(event.request).then((networkResponse) => {
-          // Update the cache with the new version
-          if (networkResponse.status === 200) {
-            cache.put(event.request, networkResponse.clone());
-          }
-          return networkResponse;
-        });
-
-        // Return cached response if available, otherwise wait for network
-        return cachedResponse || fetchPromise;
-      });
-    })
-  );
+export default defineConfig(({ mode }) => {
+    const env = { ...process.env, ...loadEnv(mode, '.', '') };
+    const apiKey = env.GEMINI_API_KEY || env.API_KEY || env.VITE_GEMINI_API_KEY || "";
+    const groqKey = env.GROQ_API_KEY || env.VITE_GROQ_API_KEY || "";
+    
+    return {
+      server: {
+        port: 3000,
+        host: '0.0.0.0',
+      },
+      plugins: [react(), tailwindcss()],
+      define: {
+        'process.env.API_KEY': JSON.stringify(apiKey),
+        'process.env.GEMINI_API_KEY': JSON.stringify(apiKey),
+        'process.env.GROQ_API_KEY': JSON.stringify(groqKey)
+      },
+      resolve: {
+        alias: {
+          '@': path.resolve(__dirname, '.'),
+        }
+      }
+    };
 });

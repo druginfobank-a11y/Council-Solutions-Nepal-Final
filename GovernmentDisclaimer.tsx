@@ -75,7 +75,7 @@ const CropModal: React.FC<CropModalProps> = ({ image, onCropComplete, onCancel, 
       <div className="bg-white dark:bg-slate-900 w-full max-w-5xl rounded-[48px] overflow-hidden border border-slate-100 dark:border-slate-800 flex flex-col shadow-2xl h-[80vh]">
         <header className="p-6 md:p-8 border-b border-slate-100 dark:border-slate-800 flex justify-between items-center shrink-0">
           <div>
-            <h3 className="text-xl md:text-2xl font-black uppercase dark:text-white italic tracking-tighter">Adjust Banner Logic</h3>
+            <h3 className="text-xl md:text-2xl font-black uppercase dark:text-white italic tracking-tighter">Adjust Banner Frame</h3>
             <p className="text-[8px] md:text-[10px] font-black text-blue-500 uppercase tracking-widest mt-1">Optimization Node: Precision Cropping</p>
           </div>
           <button onClick={onCancel} className="w-10 h-10 md:w-12 md:h-12 bg-slate-50 dark:bg-slate-800 rounded-xl flex items-center justify-center text-slate-400 hover:text-red-500 transition-colors">

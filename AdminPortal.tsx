@@ -151,7 +151,7 @@ export const uploadToBunny = (
       xhr.onerror = () => reject(new Error('Network Failure: Check connectivity or CORS permissions in Bunny Dashboard.'));
       xhr.send(file);
     } catch (e: any) {
-      reject(new Error(`Logic Error: ${e.message}`));
+      reject(new Error(`Storage Sync Fault: ${e.message}`));
     }
   });
 };

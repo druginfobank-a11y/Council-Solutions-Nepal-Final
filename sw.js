@@ -1,38 +1,61 @@
-{
-  "name": "council-solutions-nepal-v3.6.2",
-  "private": true,
-  "version": "0.0.0",
-  "type": "module",
-  "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview",
-    "lint": "tsc --noEmit"
-  },
-  "dependencies": {
-    "@google/genai": "^1.35.0",
-    "@types/canvas-confetti": "^1.9.0",
-    "@types/react": "^19.2.14",
-    "@types/react-dom": "^19.2.3",
-    "canvas-confetti": "^1.9.4",
-    "firebase": "^12.8.0",
-    "jspdf": "^2.5.1",
-    "jspdf-autotable": "^3.8.2",
-    "lucide-react": "^1.7.0",
-    "motion": "^12.38.0",
-    "openai": "^6.33.0",
-    "react": "^19.2.3",
-    "react-dom": "^19.2.4",
-    "react-easy-crop": "^5.2.0",
-    "react-markdown": "^10.1.0",
-    "react-router-dom": "^7.12.0",
-    "recharts": "^3.8.1",
-    "remark-gfm": "^4.0.1"
-  },
-  "devDependencies": {
-    "@types/node": "^22.14.0",
-    "@vitejs/plugin-react": "^5.0.0",
-    "typescript": "~5.8.2",
-    "vite": "^6.2.0"
+
+const CACHE_NAME = 'csn-v3.6.2';
+const STATIC_ASSETS = [
+  '/',
+  '/index.html',
+  '/manifest.json',
+  '/logo-192.png',
+  '/logo-512.png'
+];
+
+// Install: Cache core static assets
+self.addEventListener('install', (event) => {
+  event.waitUntil(
+    caches.open(CACHE_NAME).then((cache) => {
+      return cache.addAll(STATIC_ASSETS);
+    })
+  );
+  self.skipWaiting();
+});
+
+// Activate: Clean up old caches
+self.addEventListener('activate', (event) => {
+  event.waitUntil(
+    caches.keys().then((cacheNames) => {
+      return Promise.all(
+        cacheNames.map((cacheName) => {
+          if (cacheName !== CACHE_NAME) {
+            return caches.delete(cacheName);
+          }
+        })
+      );
+    })
+  );
+  self.clients.claim();
+});
+
+// Fetch: Stale-While-Revalidate strategy
+// This allows the app to load instantly from cache while updating it in the background
+self.addEventListener('fetch', (event) => {
+  // Skip cross-origin requests (Firebase, Gemini API, etc. should handle their own caching or stay real-time)
+  if (!event.request.url.startsWith(self.location.origin)) {
+    return;
   }
-}
+
+  event.respondWith(
+    caches.open(CACHE_NAME).then((cache) => {
+      return cache.match(event.request).then((cachedResponse) => {
+        const fetchPromise = fetch(event.request).then((networkResponse) => {
+          // Update the cache with the new version
+          if (networkResponse.status === 200) {
+            cache.put(event.request, networkResponse.clone());
+          }
+          return networkResponse;
+        });
+
+        // Return cached response if available, otherwise wait for network
+        return cachedResponse || fetchPromise;
+      });
+    })
+  );
+});

@@ -53,7 +53,9 @@ const QuizHub: React.FC<{ user: User }> = ({ user }) => {
     title: '', subject: '', category: 'General', 
     moduleType: 'Unit-wise' as 'Unit-wise' | 'Set-wise' | 'Mock Exam' | 'Subject Drill',
     unitNumber: '1',
-    program: user.program || 'Common', mode: QuizMode.EXAM,
+    program: user.program || 'Common',
+    programs: [user.program || 'Common'] as string[],
+    mode: QuizMode.EXAM,
     difficulty: 'Medium' as 'Easy' | 'Medium' | 'Hard',
     duration: 30, topic: '', qCount: 10, genMode: 'topic' as 'topic' | 'file',
     attachedFile: null as File | null,
@@ -83,9 +85,10 @@ const QuizHub: React.FC<{ user: User }> = ({ user }) => {
       if (user.role === UserRole.STUDENT) {
         data = data.filter(q => {
           const qProg = q.program?.toLowerCase();
+          const qProgs = (q.programs || []).map(p => p.toLowerCase());
           const isApproved = q.status === 'approved';
-          const isGlobal = qProg === 'common' || qProg === 'all programs';
-          const isMatch = userProg && qProg === userProg;
+          const isGlobal = qProg === 'common' || qProg === 'all programs' || qProgs.includes('common') || qProgs.includes('all programs');
+          const isMatch = userProg && (qProg === userProg || qProgs.includes(userProg));
           return isApproved && (isGlobal || isMatch);
         });
       }
@@ -149,7 +152,7 @@ const QuizHub: React.FC<{ user: User }> = ({ user }) => {
 
   const startQuiz = async (quiz: Quiz, selectedMode?: QuizMode) => {
     if (!quiz.questions || quiz.questions.length === 0) {
-      alert("This logic node contains no academic items.");
+      alert("This academic node contains no items.");
       return;
     }
 
@@ -232,7 +235,7 @@ const QuizHub: React.FC<{ user: User }> = ({ user }) => {
 
   const handleLaunchBuilder = async () => {
     setGenError(null);
-    if (config.topic === '' && config.genMode === 'topic') return setGenError("Logic Error: Topic context required.");
+    if (config.topic === '' && config.genMode === 'topic') return setGenError("Academic Error: Topic context required.");
     setIsGenerating(true);
     try {
       let fileData = undefined;
@@ -249,7 +252,7 @@ const QuizHub: React.FC<{ user: User }> = ({ user }) => {
       const unitString = config.moduleType === 'Unit-wise' ? `Unit ${config.unitNumber}` : config.moduleType;
 
       const questions = await generateMCQs(
-        config.topic, config.qCount, config.program, user.council || 'NMC',
+        config.topic, config.qCount, config.programs.join(', '), user.council || 'NMC',
         config.subject, fileData, config.difficulty, unitString, config.language
       );
 
@@ -275,7 +278,9 @@ const QuizHub: React.FC<{ user: User }> = ({ user }) => {
       await publishQuiz({
         title: config.title || `Set: ${config.subject}`,
         category: config.category, subject: config.subject, unit: unitString,
-        mode: config.mode, difficulty: config.difficulty, program: config.program,
+        mode: config.mode, difficulty: config.difficulty, 
+        program: config.programs[0] || 'Common',
+        programs: config.programs,
         council: user.council || 'NPC', duration: config.duration, questionsCount: draftQuestions.length,
         status: user.role === UserRole.ADMIN ? 'approved' : 'pending', uploadedBy: user.id,
         scheduledDate: config.scheduledDate,
@@ -430,7 +435,7 @@ const QuizHub: React.FC<{ user: User }> = ({ user }) => {
           <div className="bg-white dark:bg-slate-900 w-full max-w-6xl md:rounded-[48px] shadow-2xl overflow-hidden flex flex-col h-full md:h-[90vh] border border-slate-100 dark:border-slate-800">
              <header className="p-4 md:p-10 border-b border-slate-100 dark:border-slate-800 flex justify-between items-center bg-white dark:bg-slate-900 shrink-0">
                 <div className="min-w-0">
-                   <h2 className="text-xl md:text-3xl font-black uppercase tracking-tighter text-slate-900 dark:text-white leading-none truncate italic">Logic Architect</h2>
+                   <h2 className="text-xl md:text-3xl font-black uppercase tracking-tighter text-slate-900 dark:text-white leading-none truncate italic">Academic Architect</h2>
                    <p className="text-[9px] font-black text-blue-500 uppercase tracking-widest mt-2">Drafting Set Nodes • Registry: {draftQuestions.length} Items</p>
                 </div>
                 <button onClick={() => setIsConfigView(false)} className="w-10 h-10 md:w-12 md:h-12 flex items-center justify-center bg-slate-50 dark:bg-slate-800 rounded-xl text-slate-400 hover:text-slate-950 transition-all shrink-0">
@@ -460,7 +465,7 @@ const QuizHub: React.FC<{ user: User }> = ({ user }) => {
                               <input value={config.subject} onChange={e => setConfig({...config, subject: e.target.value})} className="w-full h-14 bg-slate-50 dark:bg-slate-950 border border-slate-200 rounded-xl px-5 text-xs font-bold dark:text-white outline-none" placeholder="Microbiology" />
                            </div>
                            <div className="space-y-3">
-                              <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">Logical Module</label>
+                              <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">Academic Module</label>
                               <select value={config.moduleType} onChange={e => setConfig({...config, moduleType: e.target.value as any})} className="w-full h-14 bg-slate-50 dark:bg-slate-950 border border-slate-200 rounded-xl px-4 text-[9px] font-black uppercase dark:text-white outline-none">
                                 <option value="Unit-wise">Unit-wise</option>
                                 <option value="Set-wise">Set-wise</option>
@@ -502,18 +507,60 @@ const QuizHub: React.FC<{ user: User }> = ({ user }) => {
                      </div>
                      <div className="space-y-8">
                         <div className="space-y-3">
-                           <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">Academic Program Node</label>
-                           <select value={config.program} onChange={e => setConfig({...config, program: e.target.value})} className="w-full h-14 bg-slate-50 dark:bg-slate-950 border border-slate-100 dark:border-slate-800 rounded-xl px-4 md:px-6 text-[8px] md:text-[10px] font-black uppercase dark:text-white outline-none">
-                              <option value="Common">Global Registry</option>
-                              {Object.entries(curriculum).map(([council, levels]) => (
-                                <optgroup key={council} label={council}>{Object.values(levels).flat().filter(p => sysConfig?.enabledPrograms?.[p] !== false).map(p => <option key={p} value={p}>{p}</option>)}</optgroup>
-                              ))}
-                           </select>
+                           <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">Academic Program Nodes (Multiple)</label>
+                           <div className="max-h-64 overflow-y-auto border border-slate-100 dark:border-slate-800 rounded-2xl p-5 bg-slate-50 dark:bg-slate-950 space-y-6 shadow-inner scrollbar-hide">
+                             <div className="space-y-3">
+                               <p className="text-[8px] font-black text-slate-400 uppercase tracking-[0.2em]">Global Nodes</p>
+                               <label className="flex items-center gap-3 cursor-pointer group">
+                                 <input 
+                                   type="checkbox" 
+                                   checked={config.programs.includes('Common')}
+                                   onChange={() => {
+                                     if (config.programs.includes('Common')) {
+                                       setConfig({...config, programs: config.programs.filter(p => p !== 'Common')});
+                                     } else {
+                                       setConfig({...config, programs: [...config.programs, 'Common']});
+                                     }
+                                   }}
+                                   className="w-5 h-5 rounded-lg border-slate-300 text-blue-600 focus:ring-blue-500 transition-all"
+                                 />
+                                 <span className="text-[10px] font-black uppercase tracking-widest text-slate-600 dark:text-slate-400 group-hover:text-blue-600">Global Registry (Common)</span>
+                               </label>
+                             </div>
+
+                             {Object.entries(curriculum).map(([council, levels]) => (
+                               <div key={council} className="space-y-3">
+                                 <div className="flex items-center gap-2 border-b border-slate-200 dark:border-slate-800 pb-1">
+                                   <span className="w-1.5 h-1.5 rounded-full bg-blue-500"></span>
+                                   <p className="text-[9px] font-black text-blue-600 uppercase tracking-[0.2em]">{council} Council</p>
+                                 </div>
+                                 <div className="grid grid-cols-1 gap-2 pl-2">
+                                   {Object.values(levels).flat().filter(p => sysConfig?.enabledPrograms?.[p] !== false).map(p => (
+                                     <label key={p} className="flex items-center gap-3 cursor-pointer group">
+                                       <input 
+                                         type="checkbox" 
+                                         checked={config.programs.includes(p)}
+                                         onChange={() => {
+                                           if (config.programs.includes(p)) {
+                                             setConfig({...config, programs: config.programs.filter(x => x !== p)});
+                                           } else {
+                                             setConfig({...config, programs: [...config.programs, p]});
+                                           }
+                                         }}
+                                         className="w-5 h-5 rounded-lg border-slate-300 text-blue-600 focus:ring-blue-500 transition-all"
+                                       />
+                                       <span className="text-[10px] font-bold uppercase tracking-widest text-slate-500 dark:text-slate-400 group-hover:text-slate-900 dark:group-hover:text-white">{p}</span>
+                                     </label>
+                                   ))}
+                                 </div>
+                               </div>
+                             ))}
+                           </div>
                         </div>
                         <div className="space-y-4">
-                           <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">Logic Node Engine</label>
+                           <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">Synthesis Engine</label>
                            <div className="flex bg-slate-100 dark:bg-slate-950 p-1.5 rounded-[20px] border border-slate-200 dark:border-slate-800">
-                              <button onClick={() => setConfig({...config, genMode: 'topic'})} className={`flex-1 py-3 rounded-xl text-[9px] font-black uppercase transition-all ${config.genMode === 'topic' ? 'bg-white dark:bg-slate-800 text-purple-600 shadow-sm' : 'text-slate-400'}`}>Qwen-Logic</button>
+                              <button onClick={() => setConfig({...config, genMode: 'topic'})} className={`flex-1 py-3 rounded-xl text-[9px] font-black uppercase transition-all ${config.genMode === 'topic' ? 'bg-white dark:bg-slate-800 text-purple-600 shadow-sm' : 'text-slate-400'}`}>Llama-Text</button>
                               <button onClick={() => setConfig({...config, genMode: 'file'})} className={`flex-1 py-3 rounded-xl text-[9px] font-black uppercase transition-all ${config.genMode === 'file' ? 'bg-white dark:bg-slate-800 text-blue-600 shadow-sm' : 'text-slate-400'}`}>Llama-Vision</button>
                            </div>
                         </div>
@@ -572,7 +619,7 @@ const QuizHub: React.FC<{ user: User }> = ({ user }) => {
                <div className="max-w-6xl mx-auto flex flex-col md:flex-row gap-4">
                   {creationStep === 'config' ? (
                     <button onClick={handleLaunchBuilder} disabled={isGenerating} className={`w-full h-16 md:h-20 ${config.genMode === 'file' ? 'bg-blue-600' : 'bg-purple-600'} text-white rounded-[24px] md:rounded-[36px] font-black text-[11px] md:text-[13px] uppercase tracking-[0.2em] shadow-2xl active:scale-95 transition-all flex items-center justify-center gap-3`}>
-                       {isGenerating ? <div className="w-5 h-5 border-3 border-white/30 border-t-white rounded-full animate-spin"></div> : (draftQuestions.length > 0 ? 'APPEND MORE LOGIC' : 'INITIATE SYNTHESIS')}
+                       {isGenerating ? <div className="w-5 h-5 border-3 border-white/30 border-t-white rounded-full animate-spin"></div> : (draftQuestions.length > 0 ? 'APPEND MORE ITEMS' : 'INITIATE SYNTHESIS')}
                     </button>
                   ) : (
                     <>

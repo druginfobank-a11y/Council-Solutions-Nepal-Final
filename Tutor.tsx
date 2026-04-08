@@ -1,155 +1,301 @@
+
 import React, { useState, useEffect } from 'react';
-import * as ReactRouter from 'react-router-dom';
-import { auth, db } from '../services/firebase';
-import { sendPasswordResetEmail, signOut, deleteUser } from 'firebase/auth';
-import { doc, deleteDoc, getDoc } from 'firebase/firestore';
-import { SystemSettings } from '../types';
-import { ensureExternalLink } from '../services/storageService';
+import { User, StudyTask, UserRole } from '../types';
+import { generateMCQs, generateStudyCountdown, generateFlashcards } from '../services/geminiService';
+import { addTask, requestIntelligenceAccess } from '../services/userService';
+import { motion, AnimatePresence } from 'motion/react';
+import { 
+  Radar, 
+  RadarChart, 
+  PolarGrid, 
+  PolarAngleAxis, 
+  PolarRadiusAxis, 
+  ResponsiveContainer 
+} from 'recharts';
 
-const { useNavigate } = ReactRouter as any;
+interface StudyToolsProps {
+  user: User;
+}
 
-const Settings: React.FC = () => {
-  const navigate = useNavigate();
-  const [isDark, setIsDark] = useState(() => document.documentElement.classList.contains('dark'));
-  const [sysConfig, setSysConfig] = useState<Partial<SystemSettings>>({});
-  const [prefs, setPrefs] = useState({
-    highYield: true,
-    alerts: true
+const StudyTools: React.FC<StudyToolsProps> = ({ user }) => {
+  const [activeTab, setActiveTab] = useState<'ANALYTICS' | 'REVIEW' | 'PLAN'>('ANALYTICS');
+  const [isGeneratingPlan, setIsGeneratingPlan] = useState(false);
+  const [reviewQuestions, setReviewQuestions] = useState<any[]>([]);
+  const [isGeneratingReview, setIsGeneratingReview] = useState(false);
+  const [isRequesting, setIsRequesting] = useState(false);
+
+  const isApproved = user.role === UserRole.ADMIN || user.intelligenceApproved;
+
+  const handleRequestAccess = async () => {
+    setIsRequesting(true);
+    try {
+      await requestIntelligenceAccess(user.id);
+      alert("Access request sent to the high council. Awaiting admin synchronization.");
+    } catch (e) {
+      console.error("Request failed:", e);
+    } finally {
+      setIsRequesting(false);
+    }
+  };
+
+  if (!isApproved) {
+    return (
+      <div className="h-[70vh] flex flex-col items-center justify-center p-6 text-center relative overflow-hidden">
+        <div className="absolute inset-0 bg-blue-600/5 blur-[120px] rounded-full animate-pulse"></div>
+        <div className="max-w-md w-full space-y-10 animate-in relative z-10">
+          <div className="w-24 h-24 bg-slate-900 rounded-[40px] flex items-center justify-center text-blue-500 text-5xl shadow-[0_0_50px_rgba(37,99,235,0.2)] mx-auto border border-white/5">🔒</div>
+          <div className="space-y-3">
+            <h1 className="text-3xl md:text-4xl font-black text-white uppercase tracking-tighter leading-none italic">Intelligence Node Locked</h1>
+            <p className="text-blue-500 text-[10px] font-black uppercase tracking-[0.4em]">Protocol: Admin Verification Required</p>
+          </div>
+          <div className="bg-white/5 border border-white/5 p-8 rounded-[40px] backdrop-blur-xl text-center">
+            <p className="text-slate-400 text-sm font-medium leading-relaxed mb-6">
+              The Intelligence Node contains high-yield predictive modeling and AI study architects. To maintain institutional integrity, access is restricted to verified students.
+            </p>
+            {user.intelligenceRequested ? (
+              <div className="inline-flex items-center gap-2 px-4 py-2 bg-blue-500/10 rounded-full border border-blue-500/20">
+                <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></span>
+                <span className="text-[8px] font-black text-blue-400 uppercase tracking-widest">Awaiting Admin Approval</span>
+              </div>
+            ) : (
+              <button 
+                onClick={handleRequestAccess}
+                disabled={isRequesting}
+                className="w-full bg-blue-600 text-white py-5 rounded-3xl font-black text-[11px] uppercase tracking-[0.2em] shadow-2xl hover:scale-105 active:scale-95 transition-all"
+              >
+                {isRequesting ? 'TRANSMITTING...' : 'REQUEST NODE ACCESS'}
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const [vals, setVals] = useState<any>({
+    hours: 8, tasks: 10, readingTime: 60, complexity: 5, 
+    questions: 50, time: 60,
+    material: 100, mockScore: 75, consistency: 0.8
   });
 
-  useEffect(() => {
-    const fetchConfig = async () => {
-      const snap = await getDoc(doc(db, 'system', 'config'));
-      if (snap.exists()) setSysConfig(snap.data());
-    };
-    fetchConfig();
-  }, []);
-
-  useEffect(() => {
-    if (isDark) {
-      document.documentElement.classList.add('dark');
-      localStorage.setItem('csn_theme', 'dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-      localStorage.setItem('csn_theme', 'light');
-    }
-  }, [isDark]);
-
-  const handlePasswordReset = async () => {
-    if (auth.currentUser?.email) {
-      try {
-        await sendPasswordResetEmail(auth, auth.currentUser.email);
-        alert(`Recovery key dispatched to ${auth.currentUser.email}. Check your inbox.`);
-      } catch (e) {
-        alert("Node failure: Could not send recovery link.");
-      }
-    }
+  const calculateEfficiency = () => {
+    const efficiency = (vals.hours / (vals.tasks || 1)) * 10;
+    return { val: efficiency.toFixed(1), unit: 'Index', label: efficiency > 8 ? 'High Productivity' : efficiency > 5 ? 'Optimal' : 'Needs Focus', color: efficiency > 5 ? 'text-green-500' : 'text-orange-500' };
   };
 
-  const handleLogout = async () => {
-    if (confirm("Terminate active academic session?")) {
-      await signOut(auth);
-      navigate('/auth');
-    }
-  };
+  const radarData = Object.entries(user.weaknesses || {}).length > 0 
+    ? Object.entries(user.weaknesses || {}).map(([subject, count]) => ({
+        subject: subject.length > 12 ? subject.substring(0, 10) + '..' : subject,
+        A: count,
+        fullMark: Math.max(...Object.values(user.weaknesses || {}), 10) + 5,
+      }))
+    : [
+        { subject: 'Anatomy', A: 120, fullMark: 150 },
+        { subject: 'Physiology', A: 98, fullMark: 150 },
+        { subject: 'Biochem', A: 86, fullMark: 150 },
+        { subject: 'Pharma', A: 99, fullMark: 150 },
+        { subject: 'Patho', A: 85, fullMark: 150 },
+        { subject: 'Micro', A: 65, fullMark: 150 },
+      ];
 
-  const handleDeleteAccount = async () => {
-    const user = auth.currentUser;
-    if (!user) return;
-
-    const confirmDel = confirm("CRITICAL ACTION: This will permanently purge your academic record, evaluation history, and data node from the CSN cloud. This cannot be undone. Proceed?");
-    if (!confirmDel) return;
-
+  const handleGeneratePlan = async () => {
+    setIsGeneratingPlan(true);
     try {
-      // 1. Delete Firestore Data Node
-      await deleteDoc(doc(db, 'users', user.uid));
-      // 2. Delete Auth Node
-      await deleteUser(user);
-      alert("Terminal Session Purged Successfully.");
-      navigate('/auth');
+      const tasks = await generateStudyCountdown(user.weaknesses || {}, user.program || 'Common');
+      
+      for (const task of tasks) {
+        await addTask(user.id, {
+          text: task.text,
+          priority: task.priority as 'High' | 'Medium' | 'Low',
+          completed: false,
+          timestamp: new Date().toISOString()
+        });
+      }
+      alert("AI Study Plan synchronized to your Study Directives!");
     } catch (e: any) {
-      alert("SECURITY BLOCK: You must have a recent login session to perform this action. Please log out and log back in before purging node.");
+      console.error("Plan generation failed:", e);
+      if (e.message === 'AUTHORIZATION_REQUIRED') {
+        alert("Gemini API Key missing. Please set GEMINI_API_KEY in your Vercel Environment Variables and redeploy.");
+      } else {
+        alert("Neural link disrupted. Please try again.");
+      }
+    } finally {
+      setIsGeneratingPlan(false);
     }
   };
 
-  const handleOpenLegal = (url: string | undefined, type: 'privacy' | 'terms') => {
-    if (url) {
-      navigate(`/legal/${type}`);
-    } else {
-      alert(`The ${type === 'privacy' ? 'Privacy Policy' : 'Terms of Service'} link has not been configured in the system node yet.`);
+  const handleGenerateReview = async () => {
+    setIsGeneratingReview(true);
+    try {
+      const weakSubjects = Object.keys(user.weaknesses || {}).slice(0, 3).join(', ') || 'General Medicine';
+      const cards = await generateFlashcards(weakSubjects, 5);
+      setReviewQuestions(cards);
+    } catch (e: any) {
+      console.error("Review generation failed:", e);
+      if (e.message === 'AUTHORIZATION_REQUIRED') {
+        alert("Gemini API Key missing. Please set GEMINI_API_KEY in your Vercel Environment Variables and redeploy.");
+      } else {
+        alert("Flashcard synthesis failed. Node disconnected.");
+      }
+    } finally {
+      setIsGeneratingReview(false);
     }
   };
-
-  const ControlCard = ({ label, desc, active, onToggle, icon }: { label: string, desc: string, active: boolean, onToggle: () => void, icon: string }) => (
-    <div className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 p-6 md:p-8 rounded-[32px] md:rounded-[40px] flex items-center justify-between shadow-sm hover:shadow-md transition-all group">
-      <div className="flex items-center gap-5">
-        <div className="w-12 h-12 bg-slate-50 dark:bg-slate-800 rounded-2xl flex items-center justify-center text-xl shadow-inner group-hover:scale-110 transition-transform">
-          {icon}
-        </div>
-        <div>
-          <h3 className="text-sm md:text-base font-black text-slate-900 dark:text-white uppercase tracking-tight">{label}</h3>
-          <p className="text-[9px] md:text-[10px] font-bold text-slate-500 dark:text-slate-300 uppercase tracking-widest mt-1">{desc}</p>
-        </div>
-      </div>
-      <button 
-        onClick={onToggle}
-        className={`w-14 h-8 rounded-full p-1.5 transition-all duration-300 relative overflow-hidden ${active ? 'bg-blue-600 shadow-lg shadow-blue-500/20' : 'bg-slate-200 dark:bg-slate-800'}`}
-      >
-        <div className={`w-5 h-5 bg-white rounded-full shadow-md transition-transform duration-300 ${active ? 'translate-x-6' : 'translate-x-0'}`}></div>
-      </button>
-    </div>
-  );
 
   return (
-    <div className="max-w-3xl mx-auto py-6 md:py-12 space-y-10 md:space-y-14 pb-32 animate-in">
-      <header className="px-2">
-        <p className="text-blue-600 dark:text-blue-400 text-[10px] font-black uppercase tracking-[0.4em] mb-2">Terminal Configuration</p>
-        <h1 className="text-4xl md:text-6xl font-black uppercase tracking-tighter text-slate-900 dark:text-white leading-none">Settings</h1>
-        <p className="text-slate-500 dark:text-slate-300 font-bold uppercase text-[11px] tracking-widest mt-3 opacity-60">Personalize your academic workspace.</p>
+    <div className="space-y-8 max-w-7xl mx-auto pb-32 px-4 md:px-0">
+      <header className="flex flex-col md:flex-row md:items-center justify-between gap-6">
+        <div>
+          <h1 className="text-3xl md:text-5xl font-black tracking-tighter uppercase italic text-white leading-none">Intelligence Node</h1>
+          <p className="text-slate-500 font-bold text-[10px] uppercase tracking-[0.4em] mt-3">Scientific Learning & Performance Analytics</p>
+        </div>
+        <div className="flex bg-slate-900 p-1.5 rounded-[24px] border border-white/5">
+           {(['ANALYTICS', 'REVIEW', 'PLAN'] as const).map(tab => (
+             <button 
+               key={tab} 
+               onClick={() => setActiveTab(tab)}
+               className={`px-6 py-3 rounded-2xl text-[9px] font-black uppercase tracking-widest transition-all ${activeTab === tab ? 'bg-blue-600 text-white shadow-xl' : 'text-slate-500 hover:text-slate-300'}`}
+             >
+               {tab}
+             </button>
+           ))}
+        </div>
       </header>
 
-      <div className="space-y-6">
-        <div className="space-y-4">
-          <p className="text-[9px] font-black text-slate-500 dark:text-slate-300 uppercase tracking-widest ml-6">Display & Logic</p>
-          <ControlCard label="Dark Mode" desc="OLED-optimized visualization" icon="🌙" active={isDark} onToggle={() => setIsDark(!isDark)} />
-          <ControlCard label="High-Yield Focus" desc="Prioritize exam-critical data" icon="🎯" active={prefs.highYield} onToggle={() => setPrefs({...prefs, highYield: !prefs.highYield})} />
-        </div>
+      <AnimatePresence mode="wait">
+        {activeTab === 'ANALYTICS' && (
+          <motion.div 
+            key="analytics"
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            className="grid grid-cols-1 lg:grid-cols-12 gap-8"
+          >
+            <div className="lg:col-span-4 space-y-4">
+               <div className="bg-white dark:bg-slate-900 p-8 rounded-[40px] border border-slate-100 dark:border-slate-800 shadow-sm">
+                  <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-6">Efficiency Matrix</p>
+                  <div className="space-y-6">
+                     <div>
+                        <label className="text-[8px] font-black text-slate-500 uppercase tracking-widest mb-2 block">Study Hours</label>
+                        <input type="number" value={vals.hours} onChange={e => setVals({...vals, hours: Number(e.target.value)})} className="w-full h-12 bg-slate-50 dark:bg-slate-950 border border-slate-100 dark:border-slate-800 rounded-xl px-4 text-xs font-bold dark:text-white outline-none"/>
+                     </div>
+                     <div>
+                        <label className="text-[8px] font-black text-slate-500 uppercase tracking-widest mb-2 block">Total Tasks</label>
+                        <input type="number" value={vals.tasks} onChange={e => setVals({...vals, tasks: Number(e.target.value)})} className="w-full h-12 bg-slate-50 dark:bg-slate-950 border border-slate-100 dark:border-slate-800 rounded-xl px-4 text-xs font-bold dark:text-white outline-none"/>
+                     </div>
+                  </div>
+               </div>
+               <div className="bg-blue-600 p-8 rounded-[40px] text-white shadow-2xl">
+                  <p className="text-[9px] font-black uppercase tracking-widest opacity-60 mb-2">Calculated Index</p>
+                  <div className="flex items-baseline gap-2">
+                     <span className="text-5xl font-black italic tracking-tighter">{calculateEfficiency().val}</span>
+                     <span className="text-xs font-bold uppercase opacity-60">Points</span>
+                  </div>
+                  <p className="mt-4 text-[10px] font-black uppercase tracking-widest bg-white/20 inline-block px-3 py-1 rounded-full">{calculateEfficiency().label}</p>
+               </div>
+            </div>
+            <div className="lg:col-span-8 bg-white dark:bg-slate-900 p-10 rounded-[56px] border border-slate-100 dark:border-slate-800 shadow-sm flex flex-col items-center justify-center min-h-[450px]">
+               <div className="w-full h-full min-h-[350px]">
+                  <p className="text-[9px] font-black text-blue-500 uppercase tracking-[0.3em] mb-8 text-center">Neural Weakness Heatmap</p>
+                  <ResponsiveContainer width="100%" height={350}>
+                    <RadarChart cx="50%" cy="50%" outerRadius="80%" data={radarData}>
+                      <PolarGrid stroke="#334155" />
+                      <PolarAngleAxis dataKey="subject" tick={{ fill: '#64748b', fontSize: 10, fontWeight: 'bold' }} />
+                      <PolarRadiusAxis angle={30} domain={[0, 'auto']} tick={false} axisLine={false} />
+                      <Radar
+                        name="Weakness"
+                        dataKey="A"
+                        stroke="#2563eb"
+                        fill="#2563eb"
+                        fillOpacity={0.6}
+                      />
+                    </RadarChart>
+                  </ResponsiveContainer>
+                  <p className="text-slate-500 text-[10px] font-bold uppercase tracking-widest mt-6 max-w-sm mx-auto text-center">
+                    Higher peaks indicate subjects with frequent errors. Focus study directives on these critical nodes.
+                  </p>
+               </div>
+            </div>
+          </motion.div>
+        )}
 
-        <div className="space-y-4 pt-4">
-          <p className="text-[9px] font-black text-slate-500 dark:text-slate-300 uppercase tracking-widest ml-6">Security & Node Data</p>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <button onClick={handlePasswordReset} className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 p-8 rounded-[32px] md:rounded-[40px] text-center hover:bg-blue-600 hover:text-white group transition-all text-slate-900 dark:text-white">
-              <div className="text-2xl mb-3 group-hover:scale-125 transition-transform">🔐</div>
-              <p className="text-[10px] font-black uppercase tracking-widest">Reset Credentials</p>
+        {activeTab === 'REVIEW' && (
+          <motion.div 
+            key="review"
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            className="space-y-8"
+          >
+            <div className="bg-slate-900 p-10 rounded-[56px] border border-white/5 text-center space-y-6">
+               <div className="w-20 h-20 bg-blue-600/10 rounded-[32px] flex items-center justify-center text-4xl mx-auto border border-blue-500/20">🧠</div>
+               <h2 className="text-2xl md:text-4xl font-black text-white uppercase tracking-tighter italic">Smart Review Node</h2>
+               <p className="text-slate-400 text-sm font-medium max-w-xl mx-auto">Our Anki-style algorithm analyzes your weakness heatmap to generate high-yield flashcards for spaced repetition.</p>
+               <button 
+                 onClick={handleGenerateReview}
+                 disabled={isGeneratingReview}
+                 className="px-10 py-5 bg-blue-600 text-white rounded-3xl font-black text-[11px] uppercase tracking-widest shadow-2xl active:scale-95 transition-all"
+               >
+                 {isGeneratingReview ? 'SYNTHESIZING...' : 'INITIATE SMART REVIEW'}
+               </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+               {reviewQuestions.map((q, i) => (
+                 <div key={i} className="bg-white dark:bg-slate-900 p-8 rounded-[40px] border border-slate-100 dark:border-slate-800 shadow-sm group cursor-pointer">
+                    <p className="text-[8px] font-black text-blue-500 uppercase tracking-widest mb-4">Item #{i+1}</p>
+                    <p className="text-sm font-black dark:text-white uppercase tracking-tight leading-relaxed mb-6 italic">"{q.question}"</p>
+                    <div className="opacity-0 group-hover:opacity-100 transition-opacity">
+                       <p className="text-[8px] font-black text-green-500 uppercase tracking-widest mb-2">Correct Answer:</p>
+                       <p className="text-xs font-bold text-slate-500 uppercase">{q.answer}</p>
+                    </div>
+                 </div>
+               ))}
+            </div>
+          </motion.div>
+        )}
+
+        {activeTab === 'PLAN' && (
+          <motion.div 
+            key="plan"
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            className="bg-white dark:bg-slate-900 p-10 md:p-20 rounded-[56px] border border-slate-100 dark:border-slate-800 shadow-sm text-center space-y-10"
+          >
+            <div className="w-24 h-24 bg-purple-600/10 rounded-[40px] flex items-center justify-center text-5xl mx-auto border border-purple-500/20 shadow-2xl">🗓️</div>
+            <div className="space-y-4">
+               <h2 className="text-3xl md:text-5xl font-black dark:text-white uppercase tracking-tighter italic leading-none">AI Study Architect</h2>
+               <p className="text-slate-500 text-sm md:text-lg font-medium max-w-2xl mx-auto leading-relaxed">
+                 Generate a custom 30-day "Exam Countdown" schedule tailored to your specific weak areas identified in the neural network.
+               </p>
+            </div>
+            <button 
+              onClick={handleGeneratePlan}
+              disabled={isGeneratingPlan}
+              className="px-12 py-6 bg-purple-600 text-white rounded-[32px] font-black text-[12px] uppercase tracking-[0.2em] shadow-2xl shadow-purple-900/40 active:scale-95 transition-all"
+            >
+              {isGeneratingPlan ? 'ORCHESTRATING PLAN...' : 'GENERATE 30-DAY COUNTDOWN'}
             </button>
-            <button onClick={handleLogout} className="bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 p-8 rounded-[32px] md:rounded-[40px] text-center hover:bg-blue-600 hover:text-white group transition-all text-slate-900 dark:text-white">
-              <div className="text-2xl mb-3 group-hover:scale-125 transition-transform">🚪</div>
-              <p className="text-[10px] font-black uppercase tracking-widest">Terminate Session</p>
-            </button>
-          </div>
-          <button onClick={handleDeleteAccount} className="w-full bg-red-600/5 hover:bg-red-600 text-red-600 hover:text-white border border-red-100 dark:border-red-900/30 p-5 rounded-2xl font-black uppercase text-[9px] tracking-[0.2em] transition-all">
-             Purge Node & Delete Account (Play Store Compliance)
-          </button>
-        </div>
-
-        <div className="space-y-4 pt-4">
-          <p className="text-[9px] font-black text-slate-500 dark:text-slate-300 uppercase tracking-widest ml-6">Legal & Governance</p>
-          <div className="flex gap-2">
-             <button onClick={() => handleOpenLegal(sysConfig.privacyPolicyUrl, 'privacy')} className="flex-1 py-4 bg-slate-50 dark:bg-slate-950 hover:bg-blue-50 dark:hover:bg-blue-900/10 rounded-xl text-[9px] font-black uppercase dark:text-slate-400 transition-all">Privacy Policy</button>
-             <button onClick={() => handleOpenLegal(sysConfig.termsOfServiceUrl, 'terms')} className="flex-1 py-4 bg-slate-50 dark:bg-slate-950 hover:bg-blue-50 dark:hover:bg-blue-900/10 rounded-xl text-[9px] font-black uppercase dark:text-slate-400 transition-all">Terms of Use</button>
-          </div>
-        </div>
-      </div>
-
-      <footer className="text-center pt-10 opacity-30">
-        <div className="inline-flex items-center gap-3 bg-slate-100 dark:bg-slate-800/50 px-6 py-2 rounded-full border border-slate-200 dark:border-slate-800">
-           <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
-           <p className="text-[10px] font-black text-slate-500 dark:text-slate-300 uppercase tracking-widest">CSN STABLE v3.6.2 • NODE-ID: {auth.currentUser?.uid?.substring(0,8).toUpperCase()}</p>
-        </div>
-        <p className="mt-4 text-[8px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-[0.4em]">Official Council Node Nepal</p>
-      </footer>
+            <div className="pt-10 border-t border-slate-100 dark:border-slate-800 flex flex-wrap justify-center gap-8 opacity-40">
+               <div className="flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-purple-500"></span>
+                  <span className="text-[8px] font-black uppercase tracking-widest">Weakness Analysis</span>
+               </div>
+               <div className="flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-purple-500"></span>
+                  <span className="text-[8px] font-black uppercase tracking-widest">Spaced Repetition</span>
+               </div>
+               <div className="flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-purple-500"></span>
+                  <span className="text-[8px] font-black uppercase tracking-widest">Exam Simulation</span>
+               </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };
 
-export default Settings;
+export default StudyTools;
